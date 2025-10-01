@@ -74,24 +74,37 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
-  const register = async (userData: any) => {
-    try {
-      const response = await axios.post('/api/auth/register', userData);
-      const { token, data } = response.data;
-      
-      localStorage.setItem('token', token);
-      axios.defaults.headers.common['Authorization'] = `Bearer ${token}`;
-      setUser(data.user);
-      
-      return { success: true };
-    } catch (error: any) {
-      return { 
-        success: false, 
-        message: error.response?.data?.message || 'Registration failed' 
-      };
-    }
-  };
+  // In the register function, update to pass the token if available
+const register = async (userData: any) => {
+  try {
+    const config = {
+      headers: {} as any
+    };
 
+    // Include authorization header if user is logged in
+    const token = localStorage.getItem('token');
+        if (token) {
+          config.headers.Authorization = `Bearer ${token}`;
+        }
+
+        const response = await axios.post('/api/auth/register', userData, config);
+        const { token: newToken, data } = response.data;
+        
+        // Only set as current user if it's a self-registration (no existing token)
+        if (!token) {
+          localStorage.setItem('token', newToken);
+          axios.defaults.headers.common['Authorization'] = `Bearer ${newToken}`;
+          setUser(data.user);
+        }
+        
+        return { success: true };
+      } catch (error: any) {
+        return { 
+          success: false, 
+          message: error.response?.data?.message || 'Registration failed' 
+        };
+      }
+  };
   const logout = () => {
     localStorage.removeItem('token');
     delete axios.defaults.headers.common['Authorization'];
