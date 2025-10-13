@@ -1,7 +1,7 @@
 import axios from 'axios';
 
 // Configure axios base URL
-axios.defaults.baseURL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000';
+axios.defaults.baseURL = process.env.NEXT_PUBLIC_API_URL || 'https://lead-manager-backend-app-piyv.vercel.app';
 
 // Add auth token to requests
 axios.interceptors.request.use((config) => {
