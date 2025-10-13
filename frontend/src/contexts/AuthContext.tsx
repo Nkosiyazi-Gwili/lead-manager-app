@@ -21,6 +21,9 @@ interface AuthContextType {
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
+// BACKEND BASE URL - ADD THIS
+const BACKEND_URL = 'https://lead-manager-backend-app-piyv.vercel.app';
+
 export function useAuth() {
   const context = useContext(AuthContext);
   if (context === undefined) {
@@ -46,7 +49,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const fetchUserProfile = async () => {
     try {
-      const response = await axios.get('/api/auth/me');
+      // FIXED: Use absolute URL
+      const response = await axios.get(`${BACKEND_URL}/api/auth/me`);
       setUser(response.data.user);
     } catch (error) {
       localStorage.removeItem('token');
@@ -58,7 +62,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const login = async (email: string, password: string) => {
     try {
-      const response = await axios.post('/api/auth/login', { email, password });
+      // FIXED: Use absolute URL
+      const response = await axios.post(`${BACKEND_URL}/api/auth/login`, { email, password });
       const { token, data } = response.data;
       
       localStorage.setItem('token', token);
@@ -74,37 +79,38 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
-  // In the register function, update to pass the token if available
-const register = async (userData: any) => {
-  try {
-    const config = {
-      headers: {} as any
-    };
+  const register = async (userData: any) => {
+    try {
+      const config = {
+        headers: {} as any
+      };
 
-    // Include authorization header if user is logged in
-    const token = localStorage.getItem('token');
-        if (token) {
-          config.headers.Authorization = `Bearer ${token}`;
-        }
-
-        const response = await axios.post('/api/auth/register', userData, config);
-        const { token: newToken, data } = response.data;
-        
-        // Only set as current user if it's a self-registration (no existing token)
-        if (!token) {
-          localStorage.setItem('token', newToken);
-          axios.defaults.headers.common['Authorization'] = `Bearer ${newToken}`;
-          setUser(data.user);
-        }
-        
-        return { success: true };
-      } catch (error: any) {
-        return { 
-          success: false, 
-          message: error.response?.data?.message || 'Registration failed' 
-        };
+      // Include authorization header if user is logged in
+      const token = localStorage.getItem('token');
+      if (token) {
+        config.headers.Authorization = `Bearer ${token}`;
       }
+
+      // FIXED: Use absolute URL
+      const response = await axios.post(`${BACKEND_URL}/api/auth/register`, userData, config);
+      const { token: newToken, data } = response.data;
+      
+      // Only set as current user if it's a self-registration (no existing token)
+      if (!token) {
+        localStorage.setItem('token', newToken);
+        axios.defaults.headers.common['Authorization'] = `Bearer ${newToken}`;
+        setUser(data.user);
+      }
+      
+      return { success: true };
+    } catch (error: any) {
+      return { 
+        success: false, 
+        message: error.response?.data?.message || 'Registration failed' 
+      };
+    }
   };
+
   const logout = () => {
     localStorage.removeItem('token');
     delete axios.defaults.headers.common['Authorization'];
