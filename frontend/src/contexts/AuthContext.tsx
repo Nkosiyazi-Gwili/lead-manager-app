@@ -21,8 +21,12 @@ interface AuthContextType {
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
-// BACKEND BASE URL - ADD THIS
-const BACKEND_URL = 'https://lead-manager-backend-app-piyv.vercel.app';
+// Use environment variable for better configuration
+const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'https://lead-manager-backend-app-piyv.vercel.app';
+
+// Configure axios once
+axios.defaults.baseURL = BACKEND_URL;
+//.defaults.withCredentials = true;
 
 export function useAuth() {
   const context = useContext(AuthContext);
@@ -38,21 +42,59 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const router = useRouter();
 
   useEffect(() => {
+    // Configure axios interceptors
+    const requestInterceptor = axios.interceptors.request.use((config) => {
+      if (typeof window !== 'undefined') {
+        const token = localStorage.getItem('token');
+        if (token) {
+          config.headers.Authorization = `Bearer ${token}`;
+        }
+      }
+      return config;
+    });
+
+    const responseInterceptor = axios.interceptors.response.use(
+      (response) => response,
+      (error) => {
+        if (error.response?.status === 401) {
+          if (typeof window !== 'undefined') {
+            localStorage.removeItem('token');
+            delete axios.defaults.headers.common['Authorization'];
+            setUser(null);
+            router.push('/login');
+          }
+        }
+        return Promise.reject(error);
+      }
+    );
+
+    // Check for token and validate it
     const token = localStorage.getItem('token');
     if (token) {
-      axios.defaults.headers.common['Authorization'] = `Bearer ${token}`;
       fetchUserProfile();
     } else {
       setLoading(false);
     }
-  }, []);
+
+    return () => {
+      axios.interceptors.request.eject(requestInterceptor);
+      axios.interceptors.response.eject(responseInterceptor);
+    };
+  }, [router]);
 
   const fetchUserProfile = async () => {
     try {
-      // FIXED: Use absolute URL
-      const response = await axios.get(`${BACKEND_URL}/api/auth/me`);
+      const token = localStorage.getItem('token');
+      if (!token) {
+        setLoading(false);
+        return;
+      }
+
+      const response = await axios.get('/api/auth/me');
       setUser(response.data.user);
-    } catch (error) {
+    } catch (error: any) {
+      console.error('Failed to fetch user profile:', error);
+      // Clear invalid token
       localStorage.removeItem('token');
       delete axios.defaults.headers.common['Authorization'];
     } finally {
@@ -62,8 +104,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const login = async (email: string, password: string) => {
     try {
-      // FIXED: Use absolute URL
-      const response = await axios.post(`${BACKEND_URL}/api/auth/login`, { email, password });
+      const response = await axios.post('/api/auth/login', { email, password });
       const { token, data } = response.data;
       
       localStorage.setItem('token', token);
@@ -72,9 +113,21 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       
       return { success: true };
     } catch (error: any) {
+      console.error('Login error:', error);
+      
+      let message = 'Login failed. Please check your credentials.';
+      
+      if (error.code === 'NETWORK_ERROR' || error.code === 'ECONNREFUSED') {
+        message = 'Cannot connect to server. Please try again later.';
+      } else if (error.response?.status >= 500) {
+        message = 'Server error. Please try again later.';
+      } else if (error.response?.data?.message) {
+        message = error.response.data.message;
+      }
+      
       return { 
         success: false, 
-        message: error.response?.data?.message || 'Login failed' 
+        message 
       };
     }
   };
@@ -85,17 +138,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         headers: {} as any
       };
 
-      // Include authorization header if user is logged in
       const token = localStorage.getItem('token');
       if (token) {
         config.headers.Authorization = `Bearer ${token}`;
       }
 
-      // FIXED: Use absolute URL
-      const response = await axios.post(`${BACKEND_URL}/api/auth/register`, userData, config);
+      const response = await axios.post('/api/auth/register', userData, config);
       const { token: newToken, data } = response.data;
       
-      // Only set as current user if it's a self-registration (no existing token)
       if (!token) {
         localStorage.setItem('token', newToken);
         axios.defaults.headers.common['Authorization'] = `Bearer ${newToken}`;
@@ -104,9 +154,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       
       return { success: true };
     } catch (error: any) {
+      console.error('Registration error:', error);
       return { 
         success: false, 
-        message: error.response?.data?.message || 'Registration failed' 
+        message: error.response?.data?.message || 'Registration failed. Please try again.' 
       };
     }
   };
