@@ -17,6 +17,13 @@ export default function Import() {
   const [activeTab, setActiveTab] = useState<'csv' | 'excel' | 'meta'>('csv');
   const [importResult, setImportResult] = useState<ImportResult | null>(null);
   const [isLoading, setIsLoading] = useState(false);
+  
+  // Meta integration state
+  const [metaToken, setMetaToken] = useState('');
+  const [metaBusinesses, setMetaBusinesses] = useState<any[]>([]);
+  const [selectedBusiness, setSelectedBusiness] = useState('');
+  const [metaForms, setMetaForms] = useState<any[]>([]);
+  const [selectedForm, setSelectedForm] = useState('');
 
   const importCSVMutation = useMutation({
     mutationFn: (formData: FormData) => 
@@ -85,14 +92,47 @@ export default function Import() {
     }
   };
 
+  const handleSetupMeta = async () => {
+    if (!metaToken) {
+      alert('Please enter a Meta access token');
+      return;
+    }
+
+    setIsLoading(true);
+    try {
+      const response = await axios.post('/api/meta/setup', { accessToken: metaToken });
+      alert('Meta access configured successfully!');
+      
+      // Fetch business accounts
+      const businessesResponse = await axios.get('/api/meta/businesses');
+      setMetaBusinesses(businessesResponse.data.data);
+    } catch (error: any) {
+      alert(error.response?.data?.message || 'Failed to setup Meta access');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  // Fetch forms when business is selected
+  const fetchForms = async (businessId: string) => {
+    try {
+      const response = await axios.get(`/api/meta/forms?pageId=${businessId}`);
+      setMetaForms(response.data.data);
+    } catch (error: any) {
+      console.error('Failed to fetch forms:', error);
+      alert('Failed to fetch forms for this business');
+    }
+  };
+
   const handleMetaImport = async () => {
     setIsLoading(true);
     setImportResult(null);
     
     try {
-      // This would integrate with Meta Business API
-      // For now, we'll simulate the API call
-      const response = await axios.post('/api/leads/import/meta');
+      const response = await axios.post('/api/leads/import/meta', {
+        formId: selectedForm,
+        businessId: selectedBusiness
+      });
       setImportResult(response.data);
       queryClient.invalidateQueries({ queryKey: ['leads'] });
     } catch (error: any) {
@@ -291,29 +331,105 @@ export default function Import() {
                   </div>
 
                   <div className="space-y-4">
+                    {/* Setup Section */}
                     <div className="p-4 border rounded-lg">
-                      <h4 className="font-semibold mb-2">Connect Meta Business Account</h4>
+                      <h4 className="font-semibold mb-2">1. Setup Meta Access</h4>
                       <p className="text-sm text-gray-600 mb-4">
-                        Connect your Meta Business account to import leads from your ad campaigns.
+                        Configure your Meta Business API access token.
                       </p>
-                      <button className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700">
-                        Connect Meta Account
-                      </button>
+                      <div className="space-y-3">
+                        <input
+                          type="password"
+                          placeholder="Enter Meta Access Token"
+                          className="w-full p-2 border rounded"
+                          value={metaToken}
+                          onChange={(e) => setMetaToken(e.target.value)}
+                        />
+                        <button 
+                          onClick={handleSetupMeta}
+                          disabled={isLoading}
+                          className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700 disabled:opacity-50"
+                        >
+                          {isLoading ? 'Setting up...' : 'Setup Meta Access'}
+                        </button>
+                      </div>
                     </div>
 
+                    {/* Business Accounts Section */}
+                    {metaBusinesses.length > 0 && (
+                      <div className="p-4 border rounded-lg">
+                        <h4 className="font-semibold mb-2">2. Select Business Account</h4>
+                        <select 
+                          className="w-full p-2 border rounded"
+                          value={selectedBusiness}
+                          onChange={(e) => {
+                            setSelectedBusiness(e.target.value);
+                            setSelectedForm('');
+                            if (e.target.value) {
+                              fetchForms(e.target.value);
+                            }
+                          }}
+                        >
+                          <option value="">Select a business account</option>
+                          {metaBusinesses.map(business => (
+                            <option key={business.id} value={business.id}>
+                              {business.name} {business.verification_status && `(${business.verification_status})`}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    )}
+
+                    {/* Forms Section */}
+                    {selectedBusiness && metaForms.length > 0 && (
+                      <div className="p-4 border rounded-lg">
+                        <h4 className="font-semibold mb-2">3. Select Form</h4>
+                        <select 
+                          className="w-full p-2 border rounded mb-4"
+                          value={selectedForm}
+                          onChange={(e) => setSelectedForm(e.target.value)}
+                        >
+                          <option value="">Select a form</option>
+                          {metaForms.map(form => (
+                            <option key={form.id} value={form.id}>
+                              {form.name} {form.leads_count !== undefined && `(${form.leads_count} leads)`}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    )}
+
+                    {/* Import Section */}
                     <div className="p-4 border rounded-lg">
-                      <h4 className="font-semibold mb-2">Import Leads</h4>
+                      <h4 className="font-semibold mb-2">4. Import Leads</h4>
                       <p className="text-sm text-gray-600 mb-4">
-                        Import leads from your connected Meta Business account.
+                        Import leads from your selected Meta Business form.
                       </p>
                       <button
                         onClick={handleMetaImport}
-                        disabled={isLoading}
+                        disabled={isLoading || !selectedForm}
                         className="bg-purple-600 text-white px-4 py-2 rounded hover:bg-purple-700 disabled:opacity-50"
                       >
                         {isLoading ? 'Importing...' : 'Import from Meta'}
                       </button>
                     </div>
+
+                    {/* Demo Section */}
+                    {metaBusinesses.length === 0 && (
+                      <div className="p-4 border border-yellow-200 bg-yellow-50 rounded-lg">
+                        <h4 className="font-semibold text-yellow-800 mb-2">Demo Mode</h4>
+                        <p className="text-sm text-yellow-700 mb-4">
+                          No Meta Business accounts configured. You can test the import with demo data.
+                        </p>
+                        <button
+                          onClick={handleMetaImport}
+                          disabled={isLoading}
+                          className="bg-yellow-600 text-white px-4 py-2 rounded hover:bg-yellow-700 disabled:opacity-50"
+                        >
+                          {isLoading ? 'Importing...' : 'Test with Demo Data'}
+                        </button>
+                      </div>
+                    )}
                   </div>
                 </div>
               )}
@@ -371,7 +487,7 @@ export default function Import() {
                                 <td className="px-4 py-2">{lead.emailAddress}</td>
                                 <td className="px-4 py-2">
                                   <span className="px-2 py-1 text-xs rounded-full bg-green-100 text-green-800">
-                                    {lead.leadStatus}
+                                    {lead.leadStatus || 'new'}
                                   </span>
                                 </td>
                               </tr>

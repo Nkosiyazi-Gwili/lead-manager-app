@@ -36,6 +36,7 @@ interface Lead {
     _id: string;
     name: string;
     email: string;
+    role: string;
   } | null;
   notes: Array<{
     _id: string;
@@ -48,6 +49,23 @@ interface Lead {
   }>;
   createdAt: string;
   updatedAt: string;
+}
+
+interface LeadsResponse {
+  success: boolean;
+  data: Lead[];
+  pagination: {
+    currentPage: number;
+    totalPages: number;
+    totalLeads: number;
+    hasNext: boolean;
+    hasPrev: boolean;
+  };
+}
+
+interface UsersResponse {
+  success: boolean;
+  data: any[];
 }
 
 export default function Leads() {
@@ -66,7 +84,7 @@ export default function Leads() {
   const [selectedLead, setSelectedLead] = useState<Lead | null>(null);
   const [newNote, setNewNote] = useState('');
 
-  const { data: leadsData, isLoading } = useQuery({
+  const { data: leadsData, isLoading } = useQuery<LeadsResponse>({
     queryKey: ['leads', filters],
     queryFn: async () => {
       const response = await axios.get('/api/leads', { params: filters });
@@ -74,7 +92,7 @@ export default function Leads() {
     }
   });
 
-  const { data: usersData } = useQuery({
+  const { data: usersData } = useQuery<UsersResponse>({
     queryKey: ['users-for-assignment'],
     queryFn: async () => {
       const response = await axios.get('/api/users/role/sales_agent');
@@ -84,46 +102,78 @@ export default function Leads() {
   });
 
   const updateStatusMutation = useMutation({
-    mutationFn: ({ leadId, status }: { leadId: string; status: string }) => 
-      axios.patch(`/api/leads/${leadId}/status`, { status }),
+    mutationFn: async ({ leadId, status }: { leadId: string; status: string }) => {
+      const response = await axios.patch(`/api/leads/${leadId}/status`, { status });
+      return response.data;
+    },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['leads'] });
+    },
+    onError: (error: any) => {
+      console.error('Update status error:', error);
+      alert(error.response?.data?.message || 'Failed to update status');
     }
   });
 
   const assignLeadMutation = useMutation({
-    mutationFn: ({ leadId, assignedTo }: { leadId: string; assignedTo: string }) => 
-      axios.patch(`/api/leads/${leadId}/assign`, { assignedTo }),
+    mutationFn: async ({ leadId, assignedTo }: { leadId: string; assignedTo: string }) => {
+      const response = await axios.patch(`/api/leads/${leadId}/assign`, { assignedTo });
+      return response.data;
+    },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['leads'] });
+    },
+    onError: (error: any) => {
+      console.error('Assign lead error:', error);
+      alert(error.response?.data?.message || 'Failed to assign lead');
     }
   });
 
   const addNoteMutation = useMutation({
-    mutationFn: ({ leadId, content }: { leadId: string; content: string }) => 
-      axios.post(`/api/leads/${leadId}/notes`, { content }),
+    mutationFn: async ({ leadId, content }: { leadId: string; content: string }) => {
+      const response = await axios.post(`/api/leads/${leadId}/notes`, { content });
+      return response.data;
+    },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['leads'] });
       setShowNotesModal(false);
       setSelectedLead(null);
       setNewNote('');
+    },
+    onError: (error: any) => {
+      console.error('Add note error:', error);
+      alert(error.response?.data?.message || 'Failed to add note');
     }
   });
 
   const addLeadMutation = useMutation({
-    mutationFn: (leadData: any) => axios.post('/api/leads', leadData),
+    mutationFn: async (leadData: any) => {
+      const response = await axios.post('/api/leads', leadData);
+      return response.data;
+    },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['leads'] });
       setShowAddModal(false);
+    },
+    onError: (error: any) => {
+      console.error('Add lead error:', error);
+      alert(error.response?.data?.message || 'Failed to create lead');
     }
   });
 
   const updateLeadMutation = useMutation({
-    mutationFn: (leadData: any) => axios.put(`/api/leads/${leadData._id}`, leadData),
+    mutationFn: async (leadData: any) => {
+      const response = await axios.put(`/api/leads/${leadData._id}`, leadData);
+      return response.data;
+    },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['leads'] });
       setShowEditModal(false);
       setSelectedLead(null);
+    },
+    onError: (error: any) => {
+      console.error('Update lead error:', error);
+      alert(error.response?.data?.message || 'Failed to update lead');
     }
   });
 
@@ -225,10 +275,10 @@ export default function Leads() {
           value={row.assignedTo?._id || ''}
           onChange={(e) => handleAssignLead(row._id, e.target.value)}
           className="px-2 py-1 text-xs rounded border focus:outline-none focus:ring-1 focus:ring-blue-500"
-          disabled={assignLeadMutation.isPending}
+          disabled={assignLeadMutation.isPending || !(user?.role === 'admin' || user?.role === 'sales_manager')}
         >
           <option value="">Unassigned</option>
-          {usersData?.map((user: any) => (
+          {usersData?.data?.map((user: any) => (
             <option key={user._id} value={user._id}>
               {user.name}
             </option>
@@ -305,6 +355,7 @@ export default function Leads() {
                 <option value="csv_import">CSV Import</option>
                 <option value="meta_business">Meta Business</option>
                 <option value="eskils">Eskils</option>
+                <option value="other">Other</option>
               </select>
             </div>
           </div>
@@ -313,11 +364,11 @@ export default function Leads() {
           <div className="bg-white rounded shadow">
             <DataTable
               columns={columns}
-              data={leadsData?.leads || []}
+              data={leadsData?.data || []}
               progressPending={isLoading}
               pagination
               paginationServer
-              paginationTotalRows={leadsData?.pagination?.total || 0}
+              paginationTotalRows={leadsData?.pagination?.totalLeads || 0}
               onChangePage={(page) => setFilters(prev => ({ ...prev, page }))}
               onChangeRowsPerPage={(currentRowsPerPage) => setFilters(prev => ({ ...prev, limit: currentRowsPerPage }))}
             />

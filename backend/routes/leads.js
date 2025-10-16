@@ -6,12 +6,32 @@ const multer = require('multer');
 const csv = require('csv-parser');
 const xlsx = require('xlsx');
 const fs = require('fs');
+const path = require('path');
 
 const router = express.Router();
 
-const upload = multer({ dest: 'uploads/' });
+// Configure multer for file uploads - Vercel compatible
+const storage = multer.memoryStorage(); // Use memory storage for Vercel
+const upload = multer({ 
+  storage: storage,
+  limits: {
+    fileSize: 10 * 1024 * 1024, // 10MB limit
+  },
+  fileFilter: (req, file, cb) => {
+    const allowedTypes = [
+      'text/csv',
+      'application/vnd.ms-excel',
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+    ];
+    if (allowedTypes.includes(file.mimetype)) {
+      cb(null, true);
+    } else {
+      cb(new Error('Invalid file type. Only CSV and Excel files are allowed.'), false);
+    }
+  }
+});
 
-// Get all leads with pagination and filtering
+// Get all leads with pagination and filtering - IMPROVED
 router.get('/', auth, async (req, res) => {
   try {
     const page = parseInt(req.query.page) || 1;
@@ -25,55 +45,92 @@ router.get('/', auth, async (req, res) => {
       filter.assignedTo = req.user.id;
     }
 
-    if (req.query.status) {
+    // Filter by status
+    if (req.query.status && req.query.status !== '') {
       filter.leadStatus = req.query.status;
     }
 
-    if (req.query.source) {
+    // Filter by source
+    if (req.query.source && req.query.source !== '') {
       filter.leadSource = req.query.source;
     }
 
-    const leads = await Lead.find(filter)
-      .populate('assignedTo', 'name email')
+    // Search functionality
+    if (req.query.search && req.query.search !== '') {
+      filter.$or = [
+        { companyTradingName: { $regex: req.query.search, $options: 'i' } },
+        { companyRegisteredName: { $regex: req.query.search, $options: 'i' } },
+        { name: { $regex: req.query.search, $options: 'i' } },
+        { surname: { $regex: req.query.search, $options: 'i' } },
+        { emailAddress: { $regex: req.query.search, $options: 'i' } },
+        { mobileNumber: { $regex: req.query.search, $options: 'i' } }
+      ];
+    }
+
+    // Build query
+    const query = Lead.find(filter)
+      .populate('assignedTo', 'name email role')
       .populate('createdBy', 'name email')
       .sort({ createdAt: -1 })
       .skip(skip)
       .limit(limit);
 
-    const total = await Lead.countDocuments(filter);
+    const [leads, total] = await Promise.all([
+      query.exec(),
+      Lead.countDocuments(filter)
+    ]);
 
     res.json({
-      leads,
+      success: true,
+      data: leads,
       pagination: {
-        current: page,
-        pages: Math.ceil(total / limit),
-        total
+        currentPage: page,
+        totalPages: Math.ceil(total / limit),
+        totalLeads: total,
+        hasNext: page < Math.ceil(total / limit),
+        hasPrev: page > 1
       }
     });
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    console.error('Get leads error:', error);
+    res.status(500).json({ 
+      success: false,
+      message: 'Error fetching leads',
+      error: error.message 
+    });
   }
 });
 
-// Get single lead
+// Get single lead - IMPROVED
 router.get('/:id', auth, async (req, res) => {
   try {
     const lead = await Lead.findById(req.params.id)
-      .populate('assignedTo', 'name email')
+      .populate('assignedTo', 'name email role')
       .populate('createdBy', 'name email')
       .populate('notes.createdBy', 'name email');
 
     if (!lead) {
-      return res.status(404).json({ message: 'Lead not found' });
+      return res.status(404).json({ 
+        success: false,
+        message: 'Lead not found' 
+      });
     }
 
-    res.json(lead);
+    res.json({
+      success: true,
+      data: lead
+    });
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    console.error('Get lead error:', error);
+    res.status(500).json({ 
+      success: false,
+      message: 'Error fetching lead',
+      error: error.message 
+    });
   }
 });
 
-// Create new lead
+// Create new lead - IMPROVED
 router.post('/', auth, async (req, res) => {
   try {
     const leadData = {
@@ -82,16 +139,34 @@ router.post('/', auth, async (req, res) => {
     };
 
     const lead = await Lead.create(leadData);
-    await lead.populate('assignedTo', 'name email');
+    await lead.populate('assignedTo', 'name email role');
     await lead.populate('createdBy', 'name email');
 
-    res.status(201).json(lead);
+    res.status(201).json({
+      success: true,
+      data: lead,
+      message: 'Lead created successfully'
+    });
   } catch (error) {
-    res.status(400).json({ message: error.message });
+    console.error('Create lead error:', error);
+    
+    if (error.name === 'ValidationError') {
+      return res.status(400).json({ 
+        success: false,
+        message: 'Validation error',
+        errors: Object.values(error.errors).map(err => err.message)
+      });
+    }
+    
+    res.status(500).json({ 
+      success: false,
+      message: 'Error creating lead',
+      error: error.message 
+    });
   }
 });
 
-// Update lead
+// Update lead - IMPROVED
 router.put('/:id', auth, async (req, res) => {
   try {
     const lead = await Lead.findByIdAndUpdate(
@@ -99,141 +174,416 @@ router.put('/:id', auth, async (req, res) => {
       req.body,
       { new: true, runValidators: true }
     )
-      .populate('assignedTo', 'name email')
-      .populate('createdBy', 'name email');
+      .populate('assignedTo', 'name email role')
+      .populate('createdBy', 'name email')
+      .populate('notes.createdBy', 'name email');
 
     if (!lead) {
-      return res.status(404).json({ message: 'Lead not found' });
+      return res.status(404).json({ 
+        success: false,
+        message: 'Lead not found' 
+      });
     }
 
-    res.json(lead);
+    res.json({
+      success: true,
+      data: lead,
+      message: 'Lead updated successfully'
+    });
   } catch (error) {
-    res.status(400).json({ message: error.message });
+    console.error('Update lead error:', error);
+    
+    if (error.name === 'ValidationError') {
+      return res.status(400).json({ 
+        success: false,
+        message: 'Validation error',
+        errors: Object.values(error.errors).map(err => err.message)
+      });
+    }
+    
+    res.status(500).json({ 
+      success: false,
+      message: 'Error updating lead',
+      error: error.message 
+    });
   }
 });
 
-// Import from CSV
+// Import from CSV - IMPROVED for Vercel
 router.post('/import/csv', auth, upload.single('file'), async (req, res) => {
   try {
     if (!req.file) {
-      return res.status(400).json({ message: 'No file uploaded' });
+      return res.status(400).json({ 
+        success: false,
+        message: 'No file uploaded' 
+      });
     }
 
     const results = [];
     const leads = [];
 
-    fs.createReadStream(req.file.path)
-      .pipe(csv())
-      .on('data', (data) => results.push(data))
-      .on('end', async () => {
-        try {
-          for (const row of results) {
-            const leadData = mapCSVRowToLead(row, req.user.id);
-            leads.push(leadData);
+    // Process CSV from buffer (Vercel compatible)
+    const fileBuffer = req.file.buffer;
+    
+    return new Promise((resolve, reject) => {
+      const stream = require('stream');
+      const bufferStream = new stream.PassThrough();
+      bufferStream.end(fileBuffer);
+
+      bufferStream
+        .pipe(csv())
+        .on('data', (data) => results.push(data))
+        .on('end', async () => {
+          try {
+            for (const row of results) {
+              const leadData = mapCSVRowToLead(row, req.user.id);
+              leads.push(leadData);
+            }
+
+            if (leads.length === 0) {
+              return res.status(400).json({
+                success: false,
+                message: 'No valid data found in CSV file'
+              });
+            }
+
+            const createdLeads = await Lead.insertMany(leads);
+
+            res.json({ 
+              success: true,
+              message: `${createdLeads.length} leads imported successfully`, 
+              data: createdLeads 
+            });
+            resolve();
+          } catch (error) {
+            reject(error);
           }
-
-          const createdLeads = await Lead.insertMany(leads);
-          fs.unlinkSync(req.file.path);
-
-          res.json({ 
-            message: `${createdLeads.length} leads imported successfully`, 
-            leads: createdLeads 
-          });
-        } catch (error) {
-          fs.unlinkSync(req.file.path);
-          res.status(400).json({ message: error.message });
-        }
-      })
-      .on('error', (error) => {
-        fs.unlinkSync(req.file.path);
-        res.status(500).json({ message: 'Error processing CSV file' });
+        })
+        .on('error', (error) => {
+          reject(new Error('Error processing CSV file: ' + error.message));
+        });
+    }).catch(error => {
+      console.error('CSV import error:', error);
+      res.status(500).json({ 
+        success: false,
+        message: error.message 
       });
+    });
+
   } catch (error) {
-    if (req.file) fs.unlinkSync(req.file.path);
-    res.status(500).json({ message: error.message });
+    console.error('CSV import error:', error);
+    res.status(500).json({ 
+      success: false,
+      message: error.message 
+    });
   }
 });
 
-// Import from Excel
+// Import from Excel - IMPROVED for Vercel
 router.post('/import/excel', auth, upload.single('file'), async (req, res) => {
   try {
     if (!req.file) {
-      return res.status(400).json({ message: 'No file uploaded' });
+      return res.status(400).json({ 
+        success: false,
+        message: 'No file uploaded' 
+      });
     }
 
-    const workbook = xlsx.readFile(req.file.path);
+    // Process Excel from buffer (Vercel compatible)
+    const workbook = xlsx.read(req.file.buffer, { type: 'buffer' });
     const sheetName = workbook.SheetNames[0];
     const data = xlsx.utils.sheet_to_json(workbook.Sheets[sheetName]);
+
+    if (data.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'No data found in Excel file'
+      });
+    }
 
     const leads = data.map(row => mapExcelRowToLead(row, req.user.id));
     const createdLeads = await Lead.insertMany(leads);
 
-    fs.unlinkSync(req.file.path);
-
     res.json({ 
+      success: true,
       message: `${createdLeads.length} leads imported successfully`, 
-      leads: createdLeads 
+      data: createdLeads 
     });
   } catch (error) {
-    if (req.file) fs.unlinkSync(req.file.path);
-    res.status(500).json({ message: error.message });
+    console.error('Excel import error:', error);
+    res.status(500).json({ 
+      success: false,
+      message: error.message 
+    });
   }
 });
 
-// Assign lead
+// Assign lead - IMPROVED
 router.patch('/:id/assign', auth, async (req, res) => {
   try {
-    const lead = await Lead.findById(req.params.id);
-    if (!lead) {
-      return res.status(404).json({ message: 'Lead not found' });
+    const { assignedTo } = req.body;
+    
+    if (!assignedTo) {
+      return res.status(400).json({
+        success: false,
+        message: 'assignedTo field is required'
+      });
     }
 
-    lead.assignedTo = req.body.assignedTo;
-    await lead.save();
-    await lead.populate('assignedTo', 'name email');
+    const lead = await Lead.findByIdAndUpdate(
+      req.params.id,
+      { assignedTo },
+      { new: true, runValidators: true }
+    )
+      .populate('assignedTo', 'name email role')
+      .populate('createdBy', 'name email');
 
-    res.json(lead);
+    if (!lead) {
+      return res.status(404).json({ 
+        success: false,
+        message: 'Lead not found' 
+      });
+    }
+
+    res.json({
+      success: true,
+      data: lead,
+      message: 'Lead assigned successfully'
+    });
   } catch (error) {
-    res.status(400).json({ message: error.message });
+    console.error('Assign lead error:', error);
+    res.status(500).json({ 
+      success: false,
+      message: 'Error assigning lead',
+      error: error.message 
+    });
   }
 });
 
-// Update lead status
+// Import from Meta Business
+router.post('/import/meta', auth, async (req, res) => {
+  try {
+    // For now, simulate Meta import since we need proper setup
+    // In production, this would call the actual Meta API
+    
+    const mockLeads = [
+      {
+        name: 'Meta',
+        surname: 'User 1',
+        emailAddress: 'meta1@example.com',
+        mobileNumber: '+27781112233',
+        companyTradingName: 'Meta Business Client',
+        leadSource: 'meta_business',
+        createdBy: req.user.id,
+        metaData: {
+          source: 'meta_business_simulation'
+        }
+      },
+      {
+        name: 'Meta', 
+        surname: 'User 2',
+        emailAddress: 'meta2@example.com',
+        mobileNumber: '+27784445566',
+        companyTradingName: 'Another Meta Client',
+        leadSource: 'meta_business',
+        createdBy: req.user.id,
+        metaData: {
+          source: 'meta_business_simulation'
+        }
+      }
+    ];
+
+    const createdLeads = await Lead.insertMany(mockLeads);
+
+    res.json({
+      success: true,
+      message: `${createdLeads.length} demo leads imported from Meta Business`,
+      data: createdLeads,
+      note: 'This is a simulation. Configure Meta API access for real integration.'
+    });
+  } catch (error) {
+    console.error('Meta import error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error importing from Meta',
+      error: error.message
+    });
+  }
+});
+
+// Update lead status - IMPROVED
 router.patch('/:id/status', auth, async (req, res) => {
   try {
-    const lead = await Lead.findById(req.params.id);
-    if (!lead) {
-      return res.status(404).json({ message: 'Lead not found' });
+    const { status } = req.body;
+    
+    if (!status) {
+      return res.status(400).json({
+        success: false,
+        message: 'status field is required'
+      });
     }
 
-    lead.leadStatus = req.body.status;
-    await lead.save();
+    const validStatuses = ['new', 'contacted', 'qualified', 'proposal', 'negotiation', 'closed_won', 'closed_lost'];
+    if (!validStatuses.includes(status)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid status value'
+      });
+    }
 
-    res.json(lead);
+    const lead = await Lead.findByIdAndUpdate(
+      req.params.id,
+      { leadStatus: status },
+      { new: true, runValidators: true }
+    )
+      .populate('assignedTo', 'name email role')
+      .populate('createdBy', 'name email');
+
+    if (!lead) {
+      return res.status(404).json({ 
+        success: false,
+        message: 'Lead not found' 
+      });
+    }
+
+    res.json({
+      success: true,
+      data: lead,
+      message: 'Lead status updated successfully'
+    });
   } catch (error) {
-    res.status(400).json({ message: error.message });
+    console.error('Update status error:', error);
+    res.status(500).json({ 
+      success: false,
+      message: 'Error updating lead status',
+      error: error.message 
+    });
   }
 });
 
-// Add note to lead
+// Add note to lead - IMPROVED
 router.post('/:id/notes', auth, async (req, res) => {
   try {
-    const lead = await Lead.findById(req.params.id);
-    if (!lead) {
-      return res.status(404).json({ message: 'Lead not found' });
+    const { content } = req.body;
+    
+    if (!content || content.trim() === '') {
+      return res.status(400).json({
+        success: false,
+        message: 'Note content is required'
+      });
     }
 
-    lead.notes.push({
-      content: req.body.content,
-      createdBy: req.user.id
-    });
+    const lead = await Lead.findByIdAndUpdate(
+      req.params.id,
+      {
+        $push: {
+          notes: {
+            content: content.trim(),
+            createdBy: req.user.id
+          }
+        }
+      },
+      { new: true, runValidators: true }
+    )
+      .populate('assignedTo', 'name email role')
+      .populate('createdBy', 'name email')
+      .populate('notes.createdBy', 'name email');
 
-    await lead.save();
-    await lead.populate('notes.createdBy', 'name email');
-    
-    res.json(lead);
+    if (!lead) {
+      return res.status(404).json({ 
+        success: false,
+        message: 'Lead not found' 
+      });
+    }
+
+    res.json({
+      success: true,
+      data: lead,
+      message: 'Note added successfully'
+    });
   } catch (error) {
-    res.status(400).json({ message: error.message });
+    console.error('Add note error:', error);
+    res.status(500).json({ 
+      success: false,
+      message: 'Error adding note',
+      error: error.message 
+    });
+  }
+});
+
+// Delete lead - NEW ENDPOINT
+router.delete('/:id', auth, async (req, res) => {
+  try {
+    const lead = await Lead.findByIdAndDelete(req.params.id);
+
+    if (!lead) {
+      return res.status(404).json({ 
+        success: false,
+        message: 'Lead not found' 
+      });
+    }
+
+    res.json({
+      success: true,
+      message: 'Lead deleted successfully'
+    });
+  } catch (error) {
+    console.error('Delete lead error:', error);
+    res.status(500).json({ 
+      success: false,
+      message: 'Error deleting lead',
+      error: error.message 
+    });
+  }
+});
+
+// Get lead statistics - NEW ENDPOINT
+router.get('/stats/overview', auth, async (req, res) => {
+  try {
+    let filter = {};
+    
+    // Role-based filtering for stats
+    if (req.user.role === 'sales_agent' || req.user.role === 'marketing_agent') {
+      filter.assignedTo = req.user.id;
+    }
+
+    const [
+      totalLeads,
+      newLeads,
+      contactedLeads,
+      qualifiedLeads,
+      closedWonLeads,
+      sourceStats
+    ] = await Promise.all([
+      Lead.countDocuments(filter),
+      Lead.countDocuments({ ...filter, leadStatus: 'new' }),
+      Lead.countDocuments({ ...filter, leadStatus: 'contacted' }),
+      Lead.countDocuments({ ...filter, leadStatus: 'qualified' }),
+      Lead.countDocuments({ ...filter, leadStatus: 'closed_won' }),
+      Lead.aggregate([
+        { $match: filter },
+        { $group: { _id: '$leadSource', count: { $sum: 1 } } }
+      ])
+    ]);
+
+    res.json({
+      success: true,
+      data: {
+        total: totalLeads,
+        new: newLeads,
+        contacted: contactedLeads,
+        qualified: qualifiedLeads,
+        closedWon: closedWonLeads,
+        sources: sourceStats
+      }
+    });
+  } catch (error) {
+    console.error('Get stats error:', error);
+    res.status(500).json({ 
+      success: false,
+      message: 'Error fetching statistics',
+      error: error.message 
+    });
   }
 });
 
@@ -242,26 +592,26 @@ function mapCSVRowToLead(row, userId) {
   return {
     leadSource: 'csv_import',
     createdBy: userId,
-    companyRegisteredName: row.company_registered_name,
-    companyTradingName: row.company_trading_name,
-    address: row.address,
-    name: row.name,
-    surname: row.surname,
-    occupation: row.occupation,
-    website: row.website,
-    telephoneNumber: row.telephone_number,
-    mobileNumber: row.mobile_number,
-    whatsappNumber: row.whatsapp_number,
-    industry: row.industry,
+    companyRegisteredName: row.company_registered_name || row.companyRegisteredName || '',
+    companyTradingName: row.company_trading_name || row.companyTradingName || '',
+    address: row.address || '',
+    name: row.name || '',
+    surname: row.surname || '',
+    occupation: row.occupation || '',
+    website: row.website || '',
+    telephoneNumber: row.telephone_number || row.telephoneNumber || '',
+    mobileNumber: row.mobile_number || row.mobileNumber || '',
+    whatsappNumber: row.whatsapp_number || row.whatsappNumber || '',
+    industry: row.industry || '',
     numberOfEmployees: row.number_of_employees ? parseInt(row.number_of_employees) : undefined,
-    bbbeeLevel: row.bbbee_level,
+    bbbeeLevel: row.bbbee_level || row.bbbeeLevel || '',
     numberOfBranches: row.number_of_branches ? parseInt(row.number_of_branches) : undefined,
-    emailAddress: row.email_address,
-    annualTurnover: row.annual_turnover,
-    tradingHours: row.trading_hours,
-    directorsName: row.directors_name,
-    directorsSurname: row.directors_surname,
-    socialMediaHandles: row.social_media_handles
+    emailAddress: row.email_address || row.emailAddress || '',
+    annualTurnover: row.annual_turnover || row.annualTurnover || '',
+    tradingHours: row.trading_hours || row.tradingHours || '',
+    directorsName: row.directors_name || row.directorsName || '',
+    directorsSurname: row.directors_surname || row.directorsSurname || '',
+    socialMediaHandles: row.social_media_handles || row.socialMediaHandles || ''
   };
 }
 
@@ -269,26 +619,26 @@ function mapExcelRowToLead(row, userId) {
   return {
     leadSource: 'csv_import',
     createdBy: userId,
-    companyRegisteredName: row.company_registered_name,
-    companyTradingName: row.company_trading_name,
-    address: row.address,
-    name: row.name,
-    surname: row.surname,
-    occupation: row.occupation,
-    website: row.website,
-    telephoneNumber: row.telephone_number,
-    mobileNumber: row.mobile_number,
-    whatsappNumber: row.whatsapp_number,
-    industry: row.industry,
-    numberOfEmployees: row.number_of_employees,
-    bbbeeLevel: row.bbbee_level,
-    numberOfBranches: row.number_of_branches,
-    emailAddress: row.email_address,
-    annualTurnover: row.annual_turnover,
-    tradingHours: row.trading_hours,
-    directorsName: row.directors_name,
-    directorsSurname: row.directors_surname,
-    socialMediaHandles: row.social_media_handles
+    companyRegisteredName: row.company_registered_name || row.companyRegisteredName || '',
+    companyTradingName: row.company_trading_name || row.companyTradingName || '',
+    address: row.address || '',
+    name: row.name || '',
+    surname: row.surname || '',
+    occupation: row.occupation || '',
+    website: row.website || '',
+    telephoneNumber: row.telephone_number || row.telephoneNumber || '',
+    mobileNumber: row.mobile_number || row.mobileNumber || '',
+    whatsappNumber: row.whatsapp_number || row.whatsappNumber || '',
+    industry: row.industry || '',
+    numberOfEmployees: row.number_of_employees || row.numberOfEmployees,
+    bbbeeLevel: row.bbbee_level || row.bbbeeLevel || '',
+    numberOfBranches: row.number_of_branches || row.numberOfBranches,
+    emailAddress: row.email_address || row.emailAddress || '',
+    annualTurnover: row.annual_turnover || row.annualTurnover || '',
+    tradingHours: row.trading_hours || row.tradingHours || '',
+    directorsName: row.directors_name || row.directorsName || '',
+    directorsSurname: row.directors_surname || row.directorsSurname || '',
+    socialMediaHandles: row.social_media_handles || row.socialMediaHandles || ''
   };
 }
 
