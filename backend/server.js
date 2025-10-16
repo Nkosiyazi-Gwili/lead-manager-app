@@ -1,235 +1,172 @@
 const express = require('express');
 const mongoose = require('mongoose');
-const dotenv = require('dotenv');
-dotenv.config();
+const cors = require('cors');
+require('dotenv').config();
 
 const app = express();
 
-// ========== STARTUP LOGS ==========
-console.log('🔍 Starting Server...');
+// Debug environment variables
+console.log('=== ENVIRONMENT VARIABLES ===');
 console.log('NODE_ENV:', process.env.NODE_ENV);
 console.log('MONGODB_URI:', process.env.MONGODB_URI ? '*** SET ***' : 'MISSING');
+console.log('CLIENT_URL:', process.env.CLIENT_URL);
+console.log('JWT_SECRET:', process.env.JWT_SECRET ? '*** SET ***' : 'MISSING');
 
-// ========== CORS CONFIGURATION ==========
+// CORS Configuration
 const allowedOrigins = [
   'http://localhost:3000',
   'https://lead-manager-app-psi.vercel.app'
 ];
 
-// Manual CORS Middleware (Vercel-safe)
-app.use((req, res, next) => {
-  const origin = req.headers.origin;
-  if (allowedOrigins.includes(origin)) {
-    res.header('Access-Control-Allow-Origin', origin);
-  }
-  res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
-  res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization');
-  res.header('Access-Control-Allow-Credentials', 'true');
+app.use(cors({
+  origin: allowedOrigins,
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization']
+}));
 
-  if (req.method === 'OPTIONS') {
-    return res.sendStatus(204);
-  }
-
-  next();
-});
-
-// ========== BODY PARSER ==========
+app.options('*', cors());
 app.use(express.json());
 
-// ========== HEALTH CHECK ==========
+// Enhanced health check
 app.get('/api/health', (req, res) => {
-  const dbStatus = mongoose.connection.readyState === 1 ? 'connected' : 'disconnected';
-  res.json({
-    status: 'OK',
+  const dbStatus = mongoose.connection.readyState;
+  const statusMap = {
+    0: 'disconnected',
+    1: 'connected', 
+    2: 'connecting',
+    3: 'disconnecting'
+  };
+  
+  res.json({ 
+    status: dbStatus === 1 ? 'OK' : 'WARNING',
     message: 'Server is running',
-    database: dbStatus,
-    timestamp: new Date().toISOString()
-  });
-});
-
-app.get('/api/test', (req, res) => {
-  res.json({
-    message: 'API is working without database',
+    database: statusMap[dbStatus] || 'unknown',
+    timestamp: new Date().toISOString(),
     environment: process.env.NODE_ENV
   });
 });
 
-// ========== DATABASE CONNECTION ==========
-let isConnected = false;
-let connectionPromise = null;
+// SIMPLE TEST ENDPOINT - NO DATABASE REQUIRED
+app.post('/api/auth/simple-login', (req, res) => {
+  const { email, password } = req.body;
+  
+  // Simple validation
+  if (!email || !password) {
+    return res.status(400).json({
+      success: false,
+      message: 'Email and password are required'
+    });
+  }
+  
+  // Mock successful login for testing
+  res.json({
+    success: true,
+    message: 'Login successful (test endpoint)',
+    token: 'test-jwt-token-12345',
+    user: {
+      id: 'test-user-id',
+      name: 'Test User',
+      email: email,
+      role: 'admin'
+    }
+  });
+});
 
+// Database connection with better error handling
 const connectDB = async () => {
-  if (isConnected) {
-    console.log('✅ Using existing MongoDB connection');
-    return true;
-  }
-
-  if (connectionPromise) {
-    console.log('⏳ Connection in progress, waiting...');
-    return await connectionPromise;
-  }
-
-  connectionPromise = (async () => {
-    try {
-      if (!process.env.MONGODB_URI) {
-        console.log('⚠️  MONGODB_URI not found');
-        return false;
-      }
-
-      console.log('🔗 Attempting to connect to MongoDB...');
-
-      if (mongoose.connection.readyState !== 0) {
-        await mongoose.disconnect();
-      }
-
-      await mongoose.connect(process.env.MONGODB_URI, {
-        serverSelectionTimeoutMS: 10000,
-        socketTimeoutMS: 45000,
-        maxPoolSize: 5,
-        minPoolSize: 1,
-        maxIdleTimeMS: 30000,
-        bufferCommands: true,
-        bufferMaxEntries: 0,
-      });
-
-      isConnected = true;
-      console.log('✅ MongoDB connected successfully!');
-
-      mongoose.connection.on('disconnected', () => {
-        console.log('⚠️  MongoDB disconnected');
-        isConnected = false;
-        connectionPromise = null;
-      });
-
-      mongoose.connection.on('error', (err) => {
-        console.error('❌ MongoDB connection error:', err);
-        isConnected = false;
-        connectionPromise = null;
-      });
-
-      return true;
-    } catch (error) {
-      console.error('❌ MongoDB connection failed:', error.message);
-      isConnected = false;
-      connectionPromise = null;
+  try {
+    if (!process.env.MONGODB_URI) {
+      console.log('⚠️  MONGODB_URI not found');
       return false;
     }
-  })();
 
-  return await connectionPromise;
-};
-
-// ========== DB CONNECTION MIDDLEWARE ==========
-const withDB = async (req, res, next) => {
-  try {
-    const dbConnected = await connectDB();
-    req.dbConnected = dbConnected;
-    if (!dbConnected) {
-      console.log('⚠️  Database not connected for request:', req.method, req.path);
-    }
-    next();
+    console.log('🔗 Connecting to MongoDB...');
+    
+    // Remove deprecated options for newer mongoose versions
+    await mongoose.connect(process.env.MONGODB_URI);
+    
+    console.log('✅ MongoDB connected successfully!');
+    return true;
+    
   } catch (error) {
-    console.error('Database middleware error:', error);
-    req.dbConnected = false;
-    next();
+    console.log('❌ MongoDB connection failed:', error.message);
+    return false;
   }
 };
 
-app.use('/api/', withDB);
+// Import routes with better error handling
+const loadRoutes = async () => {
+  try {
+    // Auth routes
+    app.use('/api/auth', require('./routes/auth'));
+    console.log('✅ Auth routes loaded');
+  } catch (error) {
+    console.log('❌ Failed to load auth routes:', error.message);
+  }
 
-// ========== ROUTES ==========
-try {
-  const authRoutes = require('./routes/auth');
-  app.use('/api/auth', authRoutes);
-  console.log('✅ Auth routes loaded');
-} catch (error) {
-  console.log('❌ Auth routes failed:', error.message);
-  app.post('/api/auth/login', (req, res) => {
-    if (!req.dbConnected) {
-      return res.status(503).json({
+  try {
+    // Leads routes
+    app.use('/api/leads', require('./routes/leads'));
+    console.log('✅ Leads routes loaded');
+  } catch (error) {
+    console.log('❌ Failed to load leads routes:', error.message);
+    // Create fallback leads route
+    app.get('/api/leads', (req, res) => {
+      res.status(503).json({
         success: false,
-        message: 'Database not available. Please try again.',
-        code: 'DATABASE_UNAVAILABLE'
+        message: 'Leads service temporarily unavailable'
       });
-    }
-    res.status(500).json({ success: false, message: 'Auth system error' });
-  });
-}
-
-try {
-  const leadsRoutes = require('./routes/leads');
-  app.use('/api/leads', leadsRoutes);
-  console.log('✅ Leads routes loaded');
-} catch (error) {
-  console.log('❌ Leads routes failed:', error.message);
-}
-
-try {
-  const usersRoutes = require('./routes/users');
-  app.use('/api/users', usersRoutes);
-  console.log('✅ Users routes loaded');
-} catch (error) {
-  console.log('⚠️ Users routes not loaded:', error.message);
-}
-
-try {
-  const reportsRoutes = require('./routes/reports');
-  app.use('/api/reports', reportsRoutes);
-  console.log('✅ Reports routes loaded');
-} catch (error) {
-  console.log('⚠️ Reports routes not loaded:', error.message);
-}
-
-try {
-  console.log('📁 Loading meta routes...');
-  const metaRoutes = require('./routes/meta');
-  app.use('/api/meta', metaRoutes);
-  console.log('✅ Meta routes loaded successfully');
-} catch (error) {
-  console.error('❌ FAILED to load meta routes:', error.message);
-}
-
-// ========== ERROR HANDLING ==========
-app.use((error, req, res, next) => {
-  console.error('Server error:', error);
-
-  if (error.name === 'MongoServerSelectionError' || error.message.includes('buffering timed out')) {
-    return res.status(503).json({
-      success: false,
-      message: 'Database connection timeout. Please try again.',
-      code: 'DATABASE_TIMEOUT'
     });
   }
 
-  res.status(500).json({
-    success: false,
-    message: 'Internal server error',
-    error: process.env.NODE_ENV === 'production' ? undefined : error.message
+  try {
+    // Users routes
+    app.use('/api/users', require('./routes/users'));
+    console.log('✅ Users routes loaded');
+  } catch (error) {
+    console.log('❌ Failed to load users routes:', error.message);
+  }
+
+  // Remove reports routes if they don't exist
+  console.log('ℹ️  Reports routes skipped - not implemented');
+};
+
+// Initialize server
+const startServer = async () => {
+  // Connect to database first
+  const dbConnected = await connectDB();
+  
+  // Load routes
+  await loadRoutes();
+  
+  // Global error handler
+  app.use((error, req, res, next) => {
+    console.error('Server error:', error);
+    res.status(500).json({ 
+      error: 'Internal server error',
+      message: process.env.NODE_ENV === 'production' 
+        ? 'Something went wrong' 
+        : error.message
+    });
   });
-});
 
-// ========== 404 HANDLERS ==========
-app.use('/api/*', (req, res) => {
-  res.status(404).json({
-    success: false,
-    message: 'API endpoint not found',
-    path: req.originalUrl
+  // 404 handler
+  app.use('*', (req, res) => {
+    res.status(404).json({ error: 'Route not found' });
   });
-});
 
-app.use('*', (req, res) => {
-  res.status(404).json({
-    success: false,
-    message: 'Route not found'
+  const PORT = process.env.PORT || 5000;
+
+  app.listen(PORT, () => {
+    console.log(`🚀 Server running on port ${PORT}`);
+    console.log(`🌐 Environment: ${process.env.NODE_ENV}`);
+    console.log(`📊 Database: ${dbConnected ? 'Connected' : 'Disconnected'}`);
+    console.log(`🔗 CORS enabled for: ${allowedOrigins.join(', ')}`);
   });
-});
+};
 
-// ========== GRACEFUL SHUTDOWN ==========
-process.on('SIGINT', async () => {
-  console.log('🛑 Shutting down gracefully...');
-  await mongoose.connection.close();
-  process.exit(0);
-});
+// Start the server
+startServer();
 
-// ========== EXPORT FOR VERCEL ==========
 module.exports = app;
