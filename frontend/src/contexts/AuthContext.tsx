@@ -41,6 +41,21 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [loading, setLoading] = useState(true);
   const router = useRouter();
 
+  // Add this function to your AuthContext to test the connection
+  const testConnection = async () => {
+    try {
+      const response = await axios.post('/api/auth/simple-login', {
+        email: 'test@test.com',
+        password: 'test123'
+      });
+      console.log('✅ Simple login test:', response.data);
+      return { success: true, data: response.data };
+    } catch (error: any) {
+      console.error('❌ Simple login test failed:', error);
+      return { success: false, error: error.message };
+    }
+  };
+
   useEffect(() => {
     // Configure axios interceptors
     const requestInterceptor = axios.interceptors.request.use((config) => {
