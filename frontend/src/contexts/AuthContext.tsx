@@ -17,6 +17,8 @@ interface AuthContextType {
   register: (userData: any) => Promise<{ success: boolean; message?: string }>;
   logout: () => void;
   loading: boolean;
+  error: string | null;
+  clearError: () => void;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -24,9 +26,68 @@ const AuthContext = createContext<AuthContextType | undefined>(undefined);
 // Use environment variable for better configuration
 const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'https://lead-manager-backend-app-piyv.vercel.app';
 
-// Configure axios once
-axios.defaults.baseURL = BACKEND_URL;
-//.defaults.withCredentials = true;
+// Configure axios with better error handling
+const api = axios.create({
+  baseURL: BACKEND_URL,
+  timeout: 15000,
+  headers: {
+    'Content-Type': 'application/json',
+  },
+});
+
+// Enhanced error handler
+const handleApiError = (error: any): string => {
+  console.error('API Error:', error);
+
+  // Network errors
+  if (error.code === 'NETWORK_ERROR' || error.code === 'ECONNREFUSED') {
+    return 'Cannot connect to server. Please check your internet connection.';
+  }
+
+  if (error.code === 'ERR_CANCELED') {
+    return 'Request was cancelled. Please try again.';
+  }
+
+  // Timeout errors
+  if (error.code === 'ECONNABORTED') {
+    return 'Request timeout. Please try again.';
+  }
+
+  // HTTP status code errors
+  if (error.response) {
+    const status = error.response.status;
+    const data = error.response.data;
+
+    switch (status) {
+      case 503:
+        if (data?.code === 'DATABASE_UNAVAILABLE') {
+          return 'Service is temporarily unavailable. Please try again in a few minutes.';
+        }
+        return 'Service temporarily unavailable. Please try again later.';
+      
+      case 500:
+        return 'Server error occurred. Please try again later.';
+      
+      case 401:
+        return data?.message || 'Invalid credentials. Please check your email and password.';
+      
+      case 400:
+        return data?.message || 'Invalid request. Please check your input.';
+      
+      case 404:
+        return 'Service endpoint not found. Please contact support.';
+      
+      case 429:
+        return 'Too many requests. Please wait a moment and try again.';
+      
+      default:
+        return data?.message || `Unexpected error (${status}). Please try again.`;
+    }
+  }
+
+  // Unknown errors
+  return 'An unexpected error occurred. Please try again.';
+};
 
 export function useAuth() {
   const context = useContext(AuthContext);
@@ -39,26 +100,18 @@ export function useAuth() {
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const router = useRouter();
 
-  // Add this function to your AuthContext to test the connection
-  const testConnection = async () => {
-    try {
-      const response = await axios.post('/api/auth/simple-login', {
-        email: 'test@test.com',
-        password: 'test123'
-      });
-      console.log('✅ Simple login test:', response.data);
-      return { success: true, data: response.data };
-    } catch (error: any) {
-      console.error('❌ Simple login test failed:', error);
-      return { success: false, error: error.message };
-    }
-  };
+  // Clear error function
+  const clearError = () => setError(null);
 
   useEffect(() => {
     // Configure axios interceptors
-    const requestInterceptor = axios.interceptors.request.use((config) => {
+    const requestInterceptor = api.interceptors.request.use((config) => {
+      // Clear any previous errors when making a new request
+      clearError();
+      
       if (typeof window !== 'undefined') {
         const token = localStorage.getItem('token');
         if (token) {
@@ -68,13 +121,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       return config;
     });
 
-    const responseInterceptor = axios.interceptors.response.use(
+    const responseInterceptor = api.interceptors.response.use(
       (response) => response,
       (error) => {
+        const errorMessage = handleApiError(error);
+        setError(errorMessage);
+
         if (error.response?.status === 401) {
           if (typeof window !== 'undefined') {
             localStorage.removeItem('token');
-            delete axios.defaults.headers.common['Authorization'];
             setUser(null);
             router.push('/login');
           }
@@ -92,8 +147,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
 
     return () => {
-      axios.interceptors.request.eject(requestInterceptor);
-      axios.interceptors.response.eject(responseInterceptor);
+      api.interceptors.request.eject(requestInterceptor);
+      api.interceptors.response.eject(responseInterceptor);
     };
   }, [router]);
 
@@ -105,50 +160,65 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         return;
       }
 
-      const response = await axios.get('/api/auth/me');
-      setUser(response.data.user);
+      const response = await api.get('/api/auth/me');
+      if (response.data.success) {
+        setUser(response.data.user);
+      } else {
+        throw new Error(response.data.message || 'Failed to fetch user profile');
+      }
     } catch (error: any) {
       console.error('Failed to fetch user profile:', error);
-      // Clear invalid token
-      localStorage.removeItem('token');
-      delete axios.defaults.headers.common['Authorization'];
+      
+      // Don't clear token for temporary errors (like 503)
+      if (error.response?.status !== 503) {
+        localStorage.removeItem('token');
+        setUser(null);
+      }
+      
+      const errorMessage = handleApiError(error);
+      setError(errorMessage);
     } finally {
       setLoading(false);
     }
   };
 
-  const login = async (email: string, password: string) => {
+  const login = async (email: string, password: string): Promise<{ success: boolean; message?: string }> => {
     try {
-      const response = await axios.post('/api/auth/login', { email, password });
-      const { token, data } = response.data;
+      setLoading(true);
+      clearError();
+
+      const response = await api.post('/api/auth/login', { email, password });
       
-      localStorage.setItem('token', token);
-      axios.defaults.headers.common['Authorization'] = `Bearer ${token}`;
-      setUser(data.user);
-      
-      return { success: true };
+      if (response.data.success) {
+        const { token, user } = response.data;
+        
+        localStorage.setItem('token', token);
+        setUser(user);
+        
+        return { success: true };
+      } else {
+        throw new Error(response.data.message || 'Login failed');
+      }
     } catch (error: any) {
       console.error('Login error:', error);
       
-      let message = 'Login failed. Please check your credentials.';
-      
-      if (error.code === 'NETWORK_ERROR' || error.code === 'ECONNREFUSED') {
-        message = 'Cannot connect to server. Please try again later.';
-      } else if (error.response?.status >= 500) {
-        message = 'Server error. Please try again later.';
-      } else if (error.response?.data?.message) {
-        message = error.response.data.message;
-      }
+      const errorMessage = handleApiError(error);
+      setError(errorMessage);
       
       return { 
         success: false, 
-        message 
+        message: errorMessage 
       };
+    } finally {
+      setLoading(false);
     }
   };
 
-  const register = async (userData: any) => {
+  const register = async (userData: any): Promise<{ success: boolean; message?: string }> => {
     try {
+      setLoading(true);
+      clearError();
+
       const config = {
         headers: {} as any
       };
@@ -158,38 +228,50 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         config.headers.Authorization = `Bearer ${token}`;
       }
 
-      const response = await axios.post('/api/auth/register', userData, config);
-      const { token: newToken, data } = response.data;
+      const response = await api.post('/api/auth/register', userData, config);
       
-      if (!token) {
-        localStorage.setItem('token', newToken);
-        axios.defaults.headers.common['Authorization'] = `Bearer ${newToken}`;
-        setUser(data.user);
+      if (response.data.success) {
+        const { token: newToken, user } = response.data;
+        
+        if (!token) {
+          localStorage.setItem('token', newToken);
+          setUser(user);
+        }
+        
+        return { success: true };
+      } else {
+        throw new Error(response.data.message || 'Registration failed');
       }
-      
-      return { success: true };
     } catch (error: any) {
       console.error('Registration error:', error);
+      
+      const errorMessage = handleApiError(error);
+      setError(errorMessage);
+      
       return { 
         success: false, 
-        message: error.response?.data?.message || 'Registration failed. Please try again.' 
+        message: errorMessage 
       };
+    } finally {
+      setLoading(false);
     }
   };
 
   const logout = () => {
     localStorage.removeItem('token');
-    delete axios.defaults.headers.common['Authorization'];
     setUser(null);
+    clearError();
     router.push('/login');
   };
 
-  const value = {
+  const value: AuthContextType = {
     user,
     login,
     register,
     logout,
-    loading
+    loading,
+    error,
+    clearError
   };
 
   return (
