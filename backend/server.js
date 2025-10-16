@@ -1,33 +1,45 @@
 const express = require('express');
 const mongoose = require('mongoose');
-const cors = require('cors');
-require('dotenv').config();
+const dotenv = require('dotenv');
+dotenv.config();
 
 const app = express();
 
+// ========== STARTUP LOGS ==========
 console.log('🔍 Starting Server...');
 console.log('NODE_ENV:', process.env.NODE_ENV);
 console.log('MONGODB_URI:', process.env.MONGODB_URI ? '*** SET ***' : 'MISSING');
 
-// CORS Configuration
+// ========== CORS CONFIGURATION ==========
 const allowedOrigins = [
   'http://localhost:3000',
   'https://lead-manager-app-psi.vercel.app'
 ];
 
-app.use(cors({
-  origin: allowedOrigins,
-  credentials: true,
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS']
-}));
+// Manual CORS Middleware (Vercel-safe)
+app.use((req, res, next) => {
+  const origin = req.headers.origin;
+  if (allowedOrigins.includes(origin)) {
+    res.header('Access-Control-Allow-Origin', origin);
+  }
+  res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+  res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  res.header('Access-Control-Allow-Credentials', 'true');
 
-app.options('*', cors());
+  if (req.method === 'OPTIONS') {
+    return res.sendStatus(204);
+  }
+
+  next();
+});
+
+// ========== BODY PARSER ==========
 app.use(express.json());
 
-// Health check (works without DB)
+// ========== HEALTH CHECK ==========
 app.get('/api/health', (req, res) => {
   const dbStatus = mongoose.connection.readyState === 1 ? 'connected' : 'disconnected';
-  res.json({ 
+  res.json({
     status: 'OK',
     message: 'Server is running',
     database: dbStatus,
@@ -35,15 +47,14 @@ app.get('/api/health', (req, res) => {
   });
 });
 
-// Test endpoint without DB
 app.get('/api/test', (req, res) => {
-  res.json({ 
+  res.json({
     message: 'API is working without database',
-    environment: process.env.NODE_ENV 
+    environment: process.env.NODE_ENV
   });
 });
 
-// MongoDB Connection with better Vercel optimization
+// ========== DATABASE CONNECTION ==========
 let isConnected = false;
 let connectionPromise = null;
 
@@ -53,7 +64,6 @@ const connectDB = async () => {
     return true;
   }
 
-  // If connection is in progress, wait for it
   if (connectionPromise) {
     console.log('⏳ Connection in progress, waiting...');
     return await connectionPromise;
@@ -68,20 +78,18 @@ const connectDB = async () => {
 
       console.log('🔗 Attempting to connect to MongoDB...');
 
-      // Close any existing connections first
       if (mongoose.connection.readyState !== 0) {
         await mongoose.disconnect();
       }
 
-      // Optimized for Vercel serverless
       await mongoose.connect(process.env.MONGODB_URI, {
-        serverSelectionTimeoutMS: 10000, // 10 seconds
-        socketTimeoutMS: 45000, // 45 seconds
-        maxPoolSize: 5, // Smaller pool for serverless
+        serverSelectionTimeoutMS: 10000,
+        socketTimeoutMS: 45000,
+        maxPoolSize: 5,
         minPoolSize: 1,
-        maxIdleTimeMS: 30000, // Close idle connections after 30s
-        bufferCommands: true, // Enable buffering
-        bufferMaxEntries: 0, // Unlimited buffering
+        maxIdleTimeMS: 30000,
+        bufferCommands: true,
+        bufferMaxEntries: 0,
       });
 
       isConnected = true;
@@ -111,16 +119,14 @@ const connectDB = async () => {
   return await connectionPromise;
 };
 
-// Database connection middleware
+// ========== DB CONNECTION MIDDLEWARE ==========
 const withDB = async (req, res, next) => {
   try {
     const dbConnected = await connectDB();
     req.dbConnected = dbConnected;
-    
     if (!dbConnected) {
       console.log('⚠️  Database not connected for request:', req.method, req.path);
     }
-    
     next();
   } catch (error) {
     console.error('Database middleware error:', error);
@@ -129,30 +135,24 @@ const withDB = async (req, res, next) => {
   }
 };
 
-// Apply database middleware to all API routes
 app.use('/api/', withDB);
 
-// Import routes with better error handling
+// ========== ROUTES ==========
 try {
   const authRoutes = require('./routes/auth');
   app.use('/api/auth', authRoutes);
   console.log('✅ Auth routes loaded');
 } catch (error) {
   console.log('❌ Auth routes failed:', error.message);
-  
-  // Fallback auth routes
   app.post('/api/auth/login', (req, res) => {
     if (!req.dbConnected) {
-      return res.status(503).json({ 
+      return res.status(503).json({
         success: false,
         message: 'Database not available. Please try again.',
         code: 'DATABASE_UNAVAILABLE'
       });
     }
-    res.status(500).json({ 
-      success: false,
-      message: 'Auth system error' 
-    });
+    res.status(500).json({ success: false, message: 'Auth system error' });
   });
 }
 
@@ -180,7 +180,6 @@ try {
   console.log('⚠️ Reports routes not loaded:', error.message);
 }
 
-// Add this to your server.js route loading section
 try {
   console.log('📁 Loading meta routes...');
   const metaRoutes = require('./routes/meta');
@@ -190,56 +189,47 @@ try {
   console.error('❌ FAILED to load meta routes:', error.message);
 }
 
-// Global error handler
+// ========== ERROR HANDLING ==========
 app.use((error, req, res, next) => {
   console.error('Server error:', error);
-  
-  // Handle MongoDB timeout errors specifically
+
   if (error.name === 'MongoServerSelectionError' || error.message.includes('buffering timed out')) {
-    return res.status(503).json({ 
+    return res.status(503).json({
       success: false,
       message: 'Database connection timeout. Please try again.',
       code: 'DATABASE_TIMEOUT'
     });
   }
-  
-  res.status(500).json({ 
+
+  res.status(500).json({
     success: false,
     message: 'Internal server error',
     error: process.env.NODE_ENV === 'production' ? undefined : error.message
   });
 });
 
-// 404 handler for API routes
+// ========== 404 HANDLERS ==========
 app.use('/api/*', (req, res) => {
-  res.status(404).json({ 
+  res.status(404).json({
     success: false,
     message: 'API endpoint not found',
     path: req.originalUrl
   });
 });
 
-// General 404 handler
 app.use('*', (req, res) => {
-  res.status(404).json({ 
+  res.status(404).json({
     success: false,
-    message: 'Route not found' 
+    message: 'Route not found'
   });
 });
 
-// const PORT = process.env.PORT || 5000;
-
-// app.listen(PORT, () => {
-//   console.log(`🚀 Server running on port ${PORT}`);
-//   console.log(`🌐 CORS enabled for: ${allowedOrigins.join(', ')}`);
-//   console.log(`💡 Environment: ${process.env.NODE_ENV}`);
-// });
-
-// Handle graceful shutdown
+// ========== GRACEFUL SHUTDOWN ==========
 process.on('SIGINT', async () => {
   console.log('🛑 Shutting down gracefully...');
   await mongoose.connection.close();
   process.exit(0);
 });
 
+// ========== EXPORT FOR VERCEL ==========
 module.exports = app;
