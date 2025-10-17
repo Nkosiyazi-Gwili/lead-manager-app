@@ -1,46 +1,67 @@
 const express = require('express');
 const mongoose = require('mongoose');
 const cors = require('cors');
+const path = require('path');
 
 const app = express();
 
+// CORS configuration - PRODUCTION FIX
+const corsOptions = {
+  origin: function (origin, callback) {
+    const allowedOrigins = [
+      'https://lead-manager-app-psi.vercel.app',
+      'https://lead-manager-app.vercel.app',
+      'http://localhost:3000',
+      'http://localhost:3001'
+    ];
+    
+    // Allow requests with no origin (like mobile apps, Postman, server-side requests)
+    if (!origin) return callback(null, true);
+    
+    if (allowedOrigins.indexOf(origin) !== -1) {
+      console.log('✅ CORS allowed for origin:', origin);
+      callback(null, true);
+    } else {
+      console.log('❌ CORS blocked for origin:', origin);
+      callback(new Error('Not allowed by CORS'));
+    }
+  },
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
+  allowedHeaders: [
+    'Content-Type', 
+    'Authorization', 
+    'X-Requested-With',
+    'Accept',
+    'Origin',
+    'Access-Control-Request-Method',
+    'Access-Control-Request-Headers'
+  ],
+  exposedHeaders: [
+    'Content-Range',
+    'X-Content-Range'
+  ],
+  preflightContinue: false,
+  optionsSuccessStatus: 204
+};
+
+// Apply CORS middleware
+app.use(cors(corsOptions));
+
+// Handle preflight requests globally
+app.options('*', cors(corsOptions));
+
+// Body parsing middleware
+app.use(express.json({ limit: '10mb' }));
+app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+
+// Request logging middleware
 app.use((req, res, next) => {
-  const allowedOrigins = [
-    'https://lead-manager-app-psi.vercel.app',
-    'http://localhost:3000'
-  ];
-  
-  const origin = req.headers.origin;
-  if (allowedOrigins.includes(origin)) {
-    res.setHeader('Access-Control-Allow-Origin', origin);
-  }
-  
-  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With');
-  res.setHeader('Access-Control-Allow-Credentials', 'true');
-  
-  // Handle preflight requests
-  if (req.method === 'OPTIONS') {
-    return res.status(200).end();
-  }
-  
-  next();
-});
-
-// Handle preflight requests explicitly
-app.options('*', cors());
-
-app.use(express.json());
-
-// Test CORS endpoint
-app.get('/api/cors-test', (req, res) => {
-  res.json({
-    success: true,
-    message: 'CORS is working!',
+  console.log(`${new Date().toISOString()} - ${req.method} ${req.url}`, {
     origin: req.headers.origin,
-    allowed: true,
-    timestamp: new Date().toISOString()
+    'user-agent': req.headers['user-agent']?.substring(0, 50) + '...'
   });
+  next();
 });
 
 // Manual environment configuration
@@ -69,19 +90,47 @@ if (process.env.NODE_ENV === 'production' && (!JWT_SECRET || JWT_SECRET === 'you
 
 console.log('✅ All required configuration is set');
 
-// Database connection
+// Database connection with improved error handling
 const connectDB = async () => {
   try {
     console.log('🔗 Connecting to MongoDB...');
-    await mongoose.connect(MONGODB_URI);
+    
+    const mongooseOptions = {
+      useNewUrlParser: true,
+      useUnifiedTopology: true,
+      serverSelectionTimeoutMS: 5000,
+      socketTimeoutMS: 45000,
+    };
+    
+    await mongoose.connect(MONGODB_URI, mongooseOptions);
+    
     console.log('✅ MongoDB Connected Successfully!');
+    console.log('   Database:', mongoose.connection.db?.databaseName);
+    console.log('   Host:', mongoose.connection.host);
+    
+    // Handle connection events
+    mongoose.connection.on('error', (err) => {
+      console.error('❌ MongoDB connection error:', err);
+    });
+    
+    mongoose.connection.on('disconnected', () => {
+      console.log('⚠️ MongoDB disconnected');
+    });
+    
+    process.on('SIGINT', async () => {
+      await mongoose.connection.close();
+      console.log(' MongoDB connection closed through app termination');
+      process.exit(0);
+    });
+    
   } catch (error) {
     console.error('❌ MongoDB connection failed:', error.message);
+    console.error('   Error details:', error);
     process.exit(1);
   }
 };
 
-// Health check
+// Enhanced health check endpoint with CORS headers
 app.get('/api/health', (req, res) => {
   res.json({
     success: true,
@@ -89,33 +138,120 @@ app.get('/api/health', (req, res) => {
     database: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected',
     timestamp: new Date().toISOString(),
     environment: process.env.NODE_ENV || 'development',
-    cors: 'enabled'
+    cors: 'enabled',
+    allowedOrigins: [
+      'https://lead-manager-app-psi.vercel.app',
+      'http://localhost:3000'
+    ]
   });
 });
+
+// Enhanced CORS test endpoint
+app.get('/api/cors-test', (req, res) => {
+  res.json({
+    success: true,
+    message: 'CORS is working!',
+    origin: req.headers.origin,
+    allowed: true,
+    timestamp: new Date().toISOString(),
+    headers: {
+      'access-control-allow-origin': req.headers.origin,
+      'access-control-allow-methods': 'GET, POST, PUT, DELETE, OPTIONS, PATCH',
+      'access-control-allow-headers': 'Content-Type, Authorization, X-Requested-With',
+      'access-control-allow-credentials': 'true'
+    }
+  });
+});
+
+// Test preflight endpoint
+app.options('/api/cors-test', cors(corsOptions));
+app.options('/api/auth/login', cors(corsOptions));
+app.options('/api/auth/register', cors(corsOptions));
 
 // Import routes
 app.use('/api/auth', require('./routes/auth'));
 app.use('/api/leads', require('./routes/leads'));
 app.use('/api/users', require('./routes/users'));
 
+// Global error handling middleware
+app.use((error, req, res, next) => {
+  console.error('🚨 Global Error Handler:', error);
+  
+  if (error.name === 'CorsError') {
+    return res.status(403).json({
+      success: false,
+      message: 'CORS Error: Request blocked by CORS policy',
+      origin: req.headers.origin,
+      allowedOrigins: [
+        'https://lead-manager-app-psi.vercel.app',
+        'http://localhost:3000'
+      ]
+    });
+  }
+  
+  res.status(error.status || 500).json({
+    success: false,
+    message: error.message || 'Internal Server Error',
+    ...(process.env.NODE_ENV === 'development' && { stack: error.stack })
+  });
+});
+
 // 404 handler
 app.use('*', (req, res) => {
   res.status(404).json({ 
     success: false, 
-    message: 'API endpoint not found' 
+    message: 'API endpoint not found',
+    path: req.originalUrl,
+    method: req.method
   });
 });
 
 // Start server
 const startServer = async () => {
-  await connectDB();
-  const PORT = process.env.PORT || 5000;
-  app.listen(PORT, () => {
-    console.log(`🚀 Server running on port ${PORT}`);
-    console.log(`🌍 Environment: ${process.env.NODE_ENV || 'development'}`);
-    console.log(`🔗 CORS enabled for production`);
-  });
+  try {
+    await connectDB();
+    
+    const PORT = process.env.PORT || 5000;
+    const server = app.listen(PORT, '0.0.0.0', () => {
+      console.log('\n🚀 Server started successfully!');
+      console.log(`   Port: ${PORT}`);
+      console.log(`   Environment: ${process.env.NODE_ENV || 'development'}`);
+      console.log(`   CORS: Enabled for production`);
+      console.log(`   Frontend URL: https://lead-manager-app-psi.vercel.app`);
+      console.log(`   Health Check: http://localhost:${PORT}/api/health`);
+      console.log(`   CORS Test: http://localhost:${PORT}/api/cors-test\n`);
+    });
+
+    // Handle server errors
+    server.on('error', (error) => {
+      console.error('❌ Server error:', error);
+      if (error.code === 'EADDRINUSE') {
+        console.error(`Port ${PORT} is already in use`);
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ Failed to start server:', error);
+    process.exit(1);
+  }
 };
+
+// Graceful shutdown
+process.on('SIGTERM', () => {
+  console.log('SIGTERM received, shutting down gracefully');
+  mongoose.connection.close();
+  process.exit(0);
+});
+
+process.on('unhandledRejection', (err) => {
+  console.error('Unhandled Promise Rejection:', err);
+  process.exit(1);
+});
+
+process.on('uncaughtException', (err) => {
+  console.error('Uncaught Exception:', err);
+  process.exit(1);
+});
 
 startServer();
 
