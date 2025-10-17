@@ -1,25 +1,40 @@
 const axios = require('axios');
 
-async function testLogin() {
-  const BASE_URL = 'http://localhost:5000/api';
+async function testBackendLogin() {
+  const backendURL = 'https://lead-manager-back-end-app-xdi1.vercel.app/api';
   
-  console.log('🧪 Testing Real Login...\n');
+  console.log('🧪 Testing Backend Login...\n');
   
-  try {
-    const response = await axios.post(`${BASE_URL}/auth/login`, {
-      email: 'admin@leadsmanager.com',
-      password: 'password123'
-    });
-    
-    console.log('✅ LOGIN SUCCESS!');
-    console.log('Response:', JSON.stringify(response.data, null, 2));
-    
-  } catch (error) {
-    console.log('❌ LOGIN FAILED!');
-    console.log('Status:', error.response?.status);
-    console.log('Response:', error.response?.data);
-    console.log('Error message:', error.message);
+  // Test credentials from your seed
+  const testCredentials = [
+    { email: 'admin@leadsmanager.com', password: 'password123' },
+    { email: 'salesmanager@leadsmanager.com', password: 'password123' },
+    { email: 'salesagent1@leadsmanager.com', password: 'password123' }
+  ];
+  
+  for (const creds of testCredentials) {
+    try {
+      console.log(`🔐 Testing: ${creds.email}`);
+      
+      const response = await axios.post(`${backendURL}/auth/login`, creds, {
+        timeout: 10000
+      });
+      
+      console.log(`✅ SUCCESS: Login successful`);
+      console.log(`   User: ${response.data.user.name}`);
+      console.log(`   Role: ${response.data.user.role}`);
+      console.log(`   Token received: ${response.data.token ? 'Yes' : 'No'}`);
+      
+    } catch (error) {
+      console.log(`❌ FAILED: ${error.response?.status}`);
+      console.log(`   Error: ${error.response?.data?.message || error.message}`);
+      
+      if (error.response?.data) {
+        console.log(`   Response:`, JSON.stringify(error.response.data, null, 2));
+      }
+    }
+    console.log('---');
   }
 }
 
-testLogin();
+testBackendLogin();

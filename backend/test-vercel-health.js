@@ -1,7 +1,7 @@
 const axios = require('axios');
 
 async function testVercelHealth() {
-  const vercelURL = 'https://lead-manager-backend-app-piyv.vercel.app/api/health';
+  const vercelURL = 'http://lead-manager-back-end-app-xdi1.vercel.app/api/health';
   
   console.log('🔍 Testing Vercel Backend Health...\n');
   
