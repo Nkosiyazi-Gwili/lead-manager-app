@@ -4,45 +4,28 @@ const cors = require('cors');
 
 const app = express();
 
-// PRODUCTION CORS CONFIGURATION
-const allowedOrigins = [
-  'http://localhost:3000',
-  'https://localhost:3000',
-  'https://lead-manager-app-psi.vercel.app',
-  'https://lead-manager-app.vercel.app',
-  /https:\/\/lead-manager-app-.*\.vercel\.app/,
-  /https:\/\/lead-manager-.*-nkosiyazi-gwili\.vercel\.app/
-];
-
-app.use(cors({
-  origin: function (origin, callback) {
-    // Allow requests with no origin (like mobile apps or curl requests)
-    if (!origin) return callback(null, true);
-    
-    // Check if origin is in allowed list
-    const isAllowed = allowedOrigins.some(allowed => {
-      if (typeof allowed === 'string') {
-        return origin === allowed;
-      } else if (allowed instanceof RegExp) {
-        return allowed.test(origin);
-      }
-      return false;
-    });
-    
-    if (isAllowed) {
-      console.log('✅ CORS allowed for:', origin);
-      return callback(null, true);
-    } else {
-      console.log('🚫 CORS blocked for:', origin);
-      return callback(new Error('Not allowed by CORS'), false);
-    }
-  },
-  credentials: true,
-  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
-  preflightContinue: false,
-  optionsSuccessStatus: 204
-}));
+app.use((req, res, next) => {
+  const allowedOrigins = [
+    'https://lead-manager-app-psi.vercel.app',
+    'http://localhost:3000'
+  ];
+  
+  const origin = req.headers.origin;
+  if (allowedOrigins.includes(origin)) {
+    res.setHeader('Access-Control-Allow-Origin', origin);
+  }
+  
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With');
+  res.setHeader('Access-Control-Allow-Credentials', 'true');
+  
+  // Handle preflight requests
+  if (req.method === 'OPTIONS') {
+    return res.status(200).end();
+  }
+  
+  next();
+});
 
 // Handle preflight requests explicitly
 app.options('*', cors());
