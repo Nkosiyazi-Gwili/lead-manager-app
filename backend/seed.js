@@ -5,7 +5,7 @@ const User = require('./models/User');
 const Lead = require('./models/Lead');
 
 // Use the environment variable from your .env file
-const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://localhost:27017/leadsmanager';
+const MONGODB_URI = process.env.MONGODB_URI || 'mongodb+srv://gwilinkosiyazi1:v34FQ0k4xFWyPec3@cluster0.1ccukxh.mongodb.net/leadmanager?retryWrites=true&w=majority';
 
 const seedData = async () => {
   try {

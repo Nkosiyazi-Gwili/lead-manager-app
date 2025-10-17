@@ -23,8 +23,26 @@ interface AuthContextType {
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
-// 🚨 FIX: Use HTTPS instead of HTTP
-const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'https://lead-manager-back-end-app-xdi1.vercel.app';
+// FORCE LOCAL BACKEND IN DEVELOPMENT
+const getBackendUrl = () => {
+  // Always use localhost:5000 when running locally
+  if (typeof window !== 'undefined') {
+    const isLocalhost = window.location.hostname === 'localhost' || 
+                       window.location.hostname === '127.0.0.1';
+    
+    if (isLocalhost) {
+      return 'http://localhost:5000';
+    }
+  }
+  
+  // Only use production URL if we're actually on the production domain
+  return 'https://lead-manager-backend-app-piyv.vercel.app';
+};
+
+const BACKEND_URL = getBackendUrl();
+
+console.log('🔗 BACKEND URL:', BACKEND_URL);
+console.log('🌐 CURRENT HOSTNAME:', typeof window !== 'undefined' ? window.location.hostname : 'server');
 
 // Configure axios
 const api = axios.create({
@@ -39,13 +57,23 @@ const api = axios.create({
 const handleApiError = (error: any): string => {
   console.error('API Error:', error);
 
-  // CORS specific errors
-  if (error.code === 'ERR_NETWORK' || error.message.includes('CORS')) {
+  // Network errors
+  if (error.code === 'ERR_NETWORK' || error.message.includes('Network Error')) {
     return 'Cannot connect to the server. Please check your internet connection and try again.';
   }
 
   if (error.code === 'ECONNREFUSED') {
     return 'Server is unavailable. Please try again later.';
+  }
+
+  // CORS specific errors
+  if (error.code === 'ERR_CANCELED' || error.message.includes('CORS')) {
+    return 'Connection blocked by browser security. Please check if the server is running and accessible.';
+  }
+
+  // Timeout errors
+  if (error.code === 'ECONNABORTED') {
+    return 'Request timeout. Please try again.';
   }
 
   // HTTP status code errors
@@ -64,6 +92,8 @@ const handleApiError = (error: any): string => {
         return data?.message || 'Invalid request. Please check your input.';
       case 404:
         return 'Service endpoint not found.';
+      case 429:
+        return 'Too many requests. Please wait a moment and try again.';
       default:
         return data?.message || `Unexpected error (${status}). Please try again.`;
     }
@@ -89,6 +119,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const clearError = () => setError(null);
 
   useEffect(() => {
+    console.log('🔄 Initializing AuthProvider...');
+    console.log('🌐 Backend URL:', BACKEND_URL);
+
     // Request interceptor
     const requestInterceptor = api.interceptors.request.use((config) => {
       clearError();
@@ -97,6 +130,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         const token = localStorage.getItem('token');
         if (token) {
           config.headers.Authorization = `Bearer ${token}`;
+          console.log('🔐 Adding token to request');
         }
       }
       return config;
@@ -104,12 +138,23 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
     // Response interceptor
     const responseInterceptor = api.interceptors.response.use(
-      (response) => response,
+      (response) => {
+        console.log('✅ API Response:', response.status, response.config.url);
+        return response;
+      },
       (error) => {
+        console.error('❌ API Error:', {
+          url: error.config?.url,
+          status: error.response?.status,
+          message: error.message,
+          code: error.code
+        });
+
         const errorMessage = handleApiError(error);
         setError(errorMessage);
 
         if (error.response?.status === 401) {
+          console.log('🔒 Unauthorized - clearing token');
           if (typeof window !== 'undefined') {
             localStorage.removeItem('token');
             setUser(null);
@@ -123,8 +168,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     // Check for existing token
     const token = localStorage.getItem('token');
     if (token) {
+      console.log('🔍 Found existing token, fetching user profile...');
       fetchUserProfile();
     } else {
+      console.log('🔍 No token found, setting loading to false');
       setLoading(false);
     }
 
@@ -142,14 +189,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         return;
       }
 
+      console.log('👤 Fetching user profile...');
       const response = await api.get('/api/auth/me');
+      
       if (response.data.success) {
+        console.log('✅ User profile fetched successfully:', response.data.user.email);
         setUser(response.data.user);
       } else {
         throw new Error(response.data.message || 'Failed to fetch user profile');
       }
     } catch (error: any) {
-      console.error('Failed to fetch user profile:', error);
+      console.error('❌ Failed to fetch user profile:', error);
       localStorage.removeItem('token');
       setUser(null);
     } finally {
@@ -163,11 +213,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       clearError();
 
       console.log('🔐 Attempting login to:', `${BACKEND_URL}/api/auth/login`);
+      console.log('📧 Email:', email);
       
       const response = await api.post('/api/auth/login', { email, password });
       
       if (response.data.success) {
         const { token, user } = response.data;
+        
+        console.log('✅ Login successful for:', user.email);
+        console.log('🎫 Token received:', token ? 'Yes' : 'No');
         
         localStorage.setItem('token', token);
         setUser(user);
@@ -177,7 +231,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         throw new Error(response.data.message || 'Login failed');
       }
     } catch (error: any) {
-      console.error('Login error:', error);
+      console.error('❌ Login error details:', {
+        status: error.response?.status,
+        message: error.response?.data?.message,
+        code: error.code
+      });
       
       const errorMessage = handleApiError(error);
       setError(errorMessage);
@@ -235,6 +293,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   };
 
   const logout = () => {
+    console.log('🚪 Logging out...');
     localStorage.removeItem('token');
     setUser(null);
     clearError();

@@ -24,8 +24,15 @@ const userSchema = new mongoose.Schema({
   },
   role: {
     type: String,
-    enum: ['admin', 'sales_manager', 'sales_agent'],
+    enum: {
+      values: ['admin', 'sales_manager', 'sales_agent', 'marketing_manager', 'marketing_agent'],
+      message: 'Role must be one of: admin, sales_manager, sales_agent, marketing_manager, marketing_agent'
+    },
     default: 'sales_agent'
+  },
+  department: {
+    type: String,
+    default: 'other'
   },
   isActive: {
     type: Boolean,
@@ -52,7 +59,7 @@ userSchema.pre('save', async function(next) {
   }
 });
 
-// Compare password method - MAKE SURE THIS EXISTS
+// Compare password method
 userSchema.methods.comparePassword = async function(candidatePassword) {
   try {
     return await bcrypt.compare(candidatePassword, this.password);
