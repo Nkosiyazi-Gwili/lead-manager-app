@@ -117,18 +117,29 @@ const connectDB = async () => {
       console.log('⚠️ MongoDB disconnected');
     });
     
-    process.on('SIGINT', async () => {
-      await mongoose.connection.close();
-      console.log(' MongoDB connection closed through app termination');
-      process.exit(0);
-    });
-    
   } catch (error) {
     console.error('❌ MongoDB connection failed:', error.message);
     console.error('   Error details:', error);
     process.exit(1);
   }
 };
+
+// Root endpoint
+app.get('/', (req, res) => {
+  res.json({
+    success: true,
+    message: 'Lead Manager API Server is running!',
+    timestamp: new Date().toISOString(),
+    environment: process.env.NODE_ENV || 'development',
+    endpoints: {
+      health: '/api/health',
+      corsTest: '/api/cors-test',
+      auth: '/api/auth',
+      leads: '/api/leads',
+      users: '/api/users'
+    }
+  });
+});
 
 // Enhanced health check endpoint with CORS headers
 app.get('/api/health', (req, res) => {
@@ -196,39 +207,63 @@ app.use((error, req, res, next) => {
   });
 });
 
-// 404 handler
-app.use('*', (req, res) => {
+// 404 handler for API routes
+app.use('/api/*', (req, res) => {
   res.status(404).json({ 
     success: false, 
     message: 'API endpoint not found',
+    path: req.originalUrl,
+    method: req.method,
+    availableEndpoints: [
+      'GET /',
+      'GET /api/health',
+      'GET /api/cors-test',
+      'POST /api/auth/login',
+      'POST /api/auth/register',
+      'GET /api/leads',
+      'POST /api/leads'
+    ]
+  });
+});
+
+// Global 404 handler
+app.use('*', (req, res) => {
+  res.status(404).json({ 
+    success: false, 
+    message: 'Route not found',
     path: req.originalUrl,
     method: req.method
   });
 });
 
-// Start server
+// Initialize server
 const startServer = async () => {
   try {
     await connectDB();
     
-    const PORT = process.env.PORT || 5000;
-    const server = app.listen(PORT, '0.0.0.0', () => {
-      console.log('\n🚀 Server started successfully!');
-      console.log(`   Port: ${PORT}`);
-      console.log(`   Environment: ${process.env.NODE_ENV || 'development'}`);
-      console.log(`   CORS: Enabled for production`);
-      console.log(`   Frontend URL: https://lead-manager-app-psi.vercel.app`);
-      console.log(`   Health Check: http://localhost:${PORT}/api/health`);
-      console.log(`   CORS Test: http://localhost:${PORT}/api/cors-test\n`);
-    });
+    // Only start listening if not in Vercel environment
+    if (process.env.VERCEL !== '1') {
+      const PORT = process.env.PORT || 5000;
+      const server = app.listen(PORT, '0.0.0.0', () => {
+        console.log('\n🚀 Server started successfully!');
+        console.log(`   Port: ${PORT}`);
+        console.log(`   Environment: ${process.env.NODE_ENV || 'development'}`);
+        console.log(`   CORS: Enabled for production`);
+        console.log(`   Frontend URL: https://lead-manager-app-psi.vercel.app`);
+        console.log(`   Health Check: http://localhost:${PORT}/api/health`);
+        console.log(`   CORS Test: http://localhost:${PORT}/api/cors-test\n`);
+      });
 
-    // Handle server errors
-    server.on('error', (error) => {
-      console.error('❌ Server error:', error);
-      if (error.code === 'EADDRINUSE') {
-        console.error(`Port ${PORT} is already in use`);
-      }
-    });
+      // Handle server errors
+      server.on('error', (error) => {
+        console.error('❌ Server error:', error);
+        if (error.code === 'EADDRINUSE') {
+          console.error(`Port ${PORT} is already in use`);
+        }
+      });
+    } else {
+      console.log('🚀 Server running on Vercel');
+    }
 
   } catch (error) {
     console.error('❌ Failed to start server:', error);
@@ -253,6 +288,8 @@ process.on('uncaughtException', (err) => {
   process.exit(1);
 });
 
+// Start the server
 startServer();
 
+// Export for Vercel
 module.exports = app;
