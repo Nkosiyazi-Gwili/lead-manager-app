@@ -195,6 +195,7 @@ app.use((error, req, res, next) => {
       origin: req.headers.origin,
       allowedOrigins: [
         'https://lead-manager-app-psi.vercel.app',
+        'https://lead-manager-back-end-app-xdi1.vercel.app',
         'http://localhost:3000'
       ]
     });
