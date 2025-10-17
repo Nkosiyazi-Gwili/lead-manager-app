@@ -36,7 +36,7 @@ const getBackendUrl = () => {
   }
   
   // Only use production URL if we're actually on the production domain
-  return 'https://lead-manager-backend-app-piyv.vercel.app';
+  return 'https://lead-manager-back-end-app-xdi1.vercel.app';
 };
 
 const BACKEND_URL = getBackendUrl();
