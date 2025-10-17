@@ -5,27 +5,14 @@ const path = require('path');
 
 const app = express();
 
-// CORS configuration - PRODUCTION FIX
+// CORS configuration - SIMPLIFIED FOR PRODUCTION
 const corsOptions = {
-  origin: function (origin, callback) {
-    const allowedOrigins = [
-      'https://lead-manager-app-psi.vercel.app',
-      'https://lead-manager-app.vercel.app',
-      'http://localhost:3000',
-      'http://localhost:3001'
-    ];
-    
-    // Allow requests with no origin (like mobile apps, Postman, server-side requests)
-    if (!origin) return callback(null, true);
-    
-    if (allowedOrigins.indexOf(origin) !== -1) {
-      console.log('✅ CORS allowed for origin:', origin);
-      callback(null, true);
-    } else {
-      console.log('❌ CORS blocked for origin:', origin);
-      callback(new Error('Not allowed by CORS'));
-    }
-  },
+  origin: [
+    'https://lead-manager-app-psi.vercel.app',
+    'https://lead-manager-app.vercel.app',
+    'http://localhost:3000',
+    'http://localhost:3001'
+  ],
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
   allowedHeaders: [
@@ -33,19 +20,12 @@ const corsOptions = {
     'Authorization', 
     'X-Requested-With',
     'Accept',
-    'Origin',
-    'Access-Control-Request-Method',
-    'Access-Control-Request-Headers'
+    'Origin'
   ],
-  exposedHeaders: [
-    'Content-Range',
-    'X-Content-Range'
-  ],
-  preflightContinue: false,
-  optionsSuccessStatus: 204
+  optionsSuccessStatus: 200
 };
 
-// Apply CORS middleware
+// Apply CORS middleware - CRITICAL: Apply before any routes
 app.use(cors(corsOptions));
 
 // Handle preflight requests globally
@@ -57,7 +37,7 @@ app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
 // Request logging middleware
 app.use((req, res, next) => {
-  console.log(`${new Date().toISOString()} - ${req.method} ${req.url}`, {
+  console.log(`${new Date().toISOString()} - ${req.method} ${req.originalUrl}`, {
     origin: req.headers.origin,
     'user-agent': req.headers['user-agent']?.substring(0, 50) + '...'
   });
@@ -76,6 +56,7 @@ console.log('   MONGODB_URI:', MONGODB_URI ? '*** SET ***' : 'MISSING');
 console.log('   JWT_SECRET:', JWT_SECRET ? '*** SET ***' : 'MISSING');
 console.log('   JWT_EXPIRE:', JWT_EXPIRE);
 console.log('   NODE_ENV:', process.env.NODE_ENV || 'development');
+console.log('   VERCEL:', process.env.VERCEL ? 'YES' : 'NO');
 
 // Validate required configuration
 if (!MONGODB_URI) {
@@ -91,7 +72,14 @@ if (process.env.NODE_ENV === 'production' && (!JWT_SECRET || JWT_SECRET === 'you
 console.log('✅ All required configuration is set');
 
 // Database connection with improved error handling
+let isDatabaseConnected = false;
+
 const connectDB = async () => {
+  if (isDatabaseConnected) {
+    console.log('✅ Using existing database connection');
+    return;
+  }
+
   try {
     console.log('🔗 Connecting to MongoDB...');
     
@@ -104,6 +92,7 @@ const connectDB = async () => {
     
     await mongoose.connect(MONGODB_URI, mongooseOptions);
     
+    isDatabaseConnected = true;
     console.log('✅ MongoDB Connected Successfully!');
     console.log('   Database:', mongoose.connection.db?.databaseName);
     console.log('   Host:', mongoose.connection.host);
@@ -111,16 +100,20 @@ const connectDB = async () => {
     // Handle connection events
     mongoose.connection.on('error', (err) => {
       console.error('❌ MongoDB connection error:', err);
+      isDatabaseConnected = false;
     });
     
     mongoose.connection.on('disconnected', () => {
       console.log('⚠️ MongoDB disconnected');
+      isDatabaseConnected = false;
     });
     
   } catch (error) {
     console.error('❌ MongoDB connection failed:', error.message);
-    console.error('   Error details:', error);
-    process.exit(1);
+    // Don't exit in serverless - let it continue without DB
+    if (!process.env.VERCEL) {
+      process.exit(1);
+    }
   }
 };
 
@@ -131,6 +124,8 @@ app.get('/', (req, res) => {
     message: 'Lead Manager API Server is running!',
     timestamp: new Date().toISOString(),
     environment: process.env.NODE_ENV || 'development',
+    database: isDatabaseConnected ? 'connected' : 'disconnected',
+    cors: 'enabled',
     endpoints: {
       health: '/api/health',
       corsTest: '/api/cors-test',
@@ -141,12 +136,12 @@ app.get('/', (req, res) => {
   });
 });
 
-// Enhanced health check endpoint with CORS headers
+// Enhanced health check endpoint
 app.get('/api/health', (req, res) => {
   res.json({
     success: true,
     message: 'Server is running',
-    database: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected',
+    database: isDatabaseConnected ? 'connected' : 'disconnected',
     timestamp: new Date().toISOString(),
     environment: process.env.NODE_ENV || 'development',
     cors: 'enabled',
@@ -159,43 +154,86 @@ app.get('/api/health', (req, res) => {
 
 // Enhanced CORS test endpoint
 app.get('/api/cors-test', (req, res) => {
+  // Manually set CORS headers for this endpoint
+  res.header('Access-Control-Allow-Origin', req.headers.origin || '*');
+  res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS, PATCH');
+  res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With');
+  res.header('Access-Control-Allow-Credentials', 'true');
+  
   res.json({
     success: true,
     message: 'CORS is working!',
     origin: req.headers.origin,
     allowed: true,
     timestamp: new Date().toISOString(),
-    headers: {
-      'access-control-allow-origin': req.headers.origin,
-      'access-control-allow-methods': 'GET, POST, PUT, DELETE, OPTIONS, PATCH',
-      'access-control-allow-headers': 'Content-Type, Authorization, X-Requested-With',
-      'access-control-allow-credentials': 'true'
-    }
+    environment: process.env.NODE_ENV || 'development'
   });
 });
 
-// Test preflight endpoint
-app.options('/api/cors-test', cors(corsOptions));
-app.options('/api/auth/login', cors(corsOptions));
-app.options('/api/auth/register', cors(corsOptions));
+// Test preflight endpoints explicitly
+app.options('/api/cors-test', (req, res) => {
+  res.header('Access-Control-Allow-Origin', req.headers.origin || '*');
+  res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS, PATCH');
+  res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With');
+  res.header('Access-Control-Allow-Credentials', 'true');
+  res.status(200).end();
+});
 
-// Import routes
-app.use('/api/auth', require('./routes/auth'));
-app.use('/api/leads', require('./routes/leads'));
-app.use('/api/users', require('./routes/users'));
+app.options('/api/auth/login', (req, res) => {
+  res.header('Access-Control-Allow-Origin', req.headers.origin || '*');
+  res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS, PATCH');
+  res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With');
+  res.header('Access-Control-Allow-Credentials', 'true');
+  res.status(200).end();
+});
+
+app.options('/api/auth/register', (req, res) => {
+  res.header('Access-Control-Allow-Origin', req.headers.origin || '*');
+  res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS, PATCH');
+  res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With');
+  res.header('Access-Control-Allow-Credentials', 'true');
+  res.status(200).end();
+});
+
+// Import routes with error handling
+try {
+  app.use('/api/auth', require('./routes/auth'));
+  console.log('✅ Auth routes loaded');
+} catch (error) {
+  console.error('❌ Failed to load auth routes:', error);
+}
+
+try {
+  app.use('/api/leads', require('./routes/leads'));
+  console.log('✅ Leads routes loaded');
+} catch (error) {
+  console.error('❌ Failed to load leads routes:', error);
+}
+
+try {
+  app.use('/api/users', require('./routes/users'));
+  console.log('✅ Users routes loaded');
+} catch (error) {
+  console.error('❌ Failed to load users routes:', error);
+}
 
 // Global error handling middleware
 app.use((error, req, res, next) => {
   console.error('🚨 Global Error Handler:', error);
   
-  if (error.name === 'CorsError') {
+  // Set CORS headers even for errors
+  res.header('Access-Control-Allow-Origin', req.headers.origin || '*');
+  res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS, PATCH');
+  res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With');
+  res.header('Access-Control-Allow-Credentials', 'true');
+  
+  if (error.message === 'Not allowed by CORS') {
     return res.status(403).json({
       success: false,
       message: 'CORS Error: Request blocked by CORS policy',
       origin: req.headers.origin,
       allowedOrigins: [
         'https://lead-manager-app-psi.vercel.app',
-        'https://lead-manager-back-end-app-xdi1.vercel.app',
         'http://localhost:3000'
       ]
     });
@@ -210,6 +248,12 @@ app.use((error, req, res, next) => {
 
 // 404 handler for API routes
 app.use('/api/*', (req, res) => {
+  // Set CORS headers for 404 responses
+  res.header('Access-Control-Allow-Origin', req.headers.origin || '*');
+  res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS, PATCH');
+  res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With');
+  res.header('Access-Control-Allow-Credentials', 'true');
+  
   res.status(404).json({ 
     success: false, 
     message: 'API endpoint not found',
@@ -229,6 +273,12 @@ app.use('/api/*', (req, res) => {
 
 // Global 404 handler
 app.use('*', (req, res) => {
+  // Set CORS headers for global 404
+  res.header('Access-Control-Allow-Origin', req.headers.origin || '*');
+  res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS, PATCH');
+  res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With');
+  res.header('Access-Control-Allow-Credentials', 'true');
+  
   res.status(404).json({ 
     success: false, 
     message: 'Route not found',
@@ -243,7 +293,7 @@ const startServer = async () => {
     await connectDB();
     
     // Only start listening if not in Vercel environment
-    if (process.env.VERCEL !== '1') {
+    if (!process.env.VERCEL) {
       const PORT = process.env.PORT || 5000;
       const server = app.listen(PORT, '0.0.0.0', () => {
         console.log('\n🚀 Server started successfully!');
@@ -263,12 +313,14 @@ const startServer = async () => {
         }
       });
     } else {
-      console.log('🚀 Server running on Vercel');
+      console.log('🚀 Server running on Vercel - Serverless mode');
     }
 
   } catch (error) {
     console.error('❌ Failed to start server:', error);
-    process.exit(1);
+    if (!process.env.VERCEL) {
+      process.exit(1);
+    }
   }
 };
 
@@ -281,12 +333,16 @@ process.on('SIGTERM', () => {
 
 process.on('unhandledRejection', (err) => {
   console.error('Unhandled Promise Rejection:', err);
-  process.exit(1);
+  if (!process.env.VERCEL) {
+    process.exit(1);
+  }
 });
 
 process.on('uncaughtException', (err) => {
   console.error('Uncaught Exception:', err);
-  process.exit(1);
+  if (!process.env.VERCEL) {
+    process.exit(1);
+  }
 });
 
 // Start the server
