@@ -5,13 +5,12 @@ const cors = require('cors');
 
 const app = express();
 
-// ✅ ULTIMATE CORS FIX
+// CORS Configuration
 const allowedOrigins = [
   'https://lead-manager-app-psi.vercel.app',
-  'http://localhost:3000'
+  'http://localhost:3000',
 ];
 
-// Method 1: Use cors package
 app.use(cors({
   origin: allowedOrigins,
   credentials: true,
@@ -19,25 +18,8 @@ app.use(cors({
   allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With']
 }));
 
-// Method 2: Manual CORS headers
-app.use((req, res, next) => {
-  const origin = req.headers.origin;
-  
-  if (allowedOrigins.includes(origin)) {
-    res.header('Access-Control-Allow-Origin', origin);
-  }
-  res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS, PATCH');
-  res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With, Accept, Origin');
-  res.header('Access-Control-Allow-Credentials', 'true');
-  res.header('Access-Control-Max-Age', '86400'); // 24 hours
-  
-  // Handle preflight
-  if (req.method === 'OPTIONS') {
-    return res.status(200).end();
-  }
-  
-  next();
-});
+// Handle preflight requests
+app.options('*', cors());
 
 // Handle all OPTIONS requests
 app.options('*', (req, res) => {
