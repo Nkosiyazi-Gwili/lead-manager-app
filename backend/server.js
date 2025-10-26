@@ -26,6 +26,7 @@ const authRoutes = require('./routes/auth');
 const leadsRoutes = require('./routes/leads');
 const usersRoutes = require('./routes/users');
 const reportsRoutes = require('./routes/reports');
+const metaRoutes = require('./routes/meta');
 const importRoutes = require('./routes/import');
 
 // Use routes
@@ -33,6 +34,7 @@ app.use('/api/auth', authRoutes);
 app.use('/api/leads', leadsRoutes);
 app.use('/api/users', usersRoutes);
 app.use('/api/reports', reportsRoutes);
+app.use('/api/meta', metaRoutes);
 app.use('/api/leads/import', importRoutes);
 
 // Health check

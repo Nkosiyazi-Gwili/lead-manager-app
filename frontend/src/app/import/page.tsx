@@ -12,6 +12,19 @@ interface ImportResult {
   errors?: string[];
 }
 
+// Helper functions for API calls
+const getApiBaseUrl = () => {
+  return process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000';
+};
+
+const getAuthHeaders = () => {
+  if (typeof window !== 'undefined') {
+    const token = localStorage.getItem('token');
+    return token ? { Authorization: `Bearer ${token}` } : {};
+  }
+  return {};
+};
+
 export default function Import() {
   const queryClient = useQueryClient();
   const [activeTab, setActiveTab] = useState<'csv' | 'excel' | 'meta'>('csv');
@@ -27,8 +40,11 @@ export default function Import() {
 
   const importCSVMutation = useMutation({
     mutationFn: (formData: FormData) => 
-      axios.post('/api/leads/import/csv', formData, {
-        headers: { 'Content-Type': 'multipart/form-data' }
+      axios.post(`${getApiBaseUrl()}/api/leads/import/csv`, formData, {
+        headers: { 
+          'Content-Type': 'multipart/form-data',
+          ...getAuthHeaders()
+        }
       }),
     onSuccess: (response) => {
       setImportResult(response.data);
@@ -45,8 +61,11 @@ export default function Import() {
 
   const importExcelMutation = useMutation({
     mutationFn: (formData: FormData) => 
-      axios.post('/api/leads/import/excel', formData, {
-        headers: { 'Content-Type': 'multipart/form-data' }
+      axios.post(`${getApiBaseUrl()}/api/leads/import/excel`, formData, {
+        headers: { 
+          'Content-Type': 'multipart/form-data',
+          ...getAuthHeaders()
+        }
       }),
     onSuccess: (response) => {
       setImportResult(response.data);
@@ -100,11 +119,16 @@ export default function Import() {
 
     setIsLoading(true);
     try {
-      const response = await axios.post('/api/meta/setup', { accessToken: metaToken });
+      const response = await axios.post(`${getApiBaseUrl()}/api/meta/setup`, 
+        { accessToken: metaToken },
+        { headers: getAuthHeaders() }
+      );
       alert('Meta access configured successfully!');
       
       // Fetch business accounts
-      const businessesResponse = await axios.get('/api/meta/businesses');
+      const businessesResponse = await axios.get(`${getApiBaseUrl()}/api/meta/businesses`, {
+        headers: getAuthHeaders()
+      });
       setMetaBusinesses(businessesResponse.data.data);
     } catch (error: any) {
       alert(error.response?.data?.message || 'Failed to setup Meta access');
@@ -116,7 +140,9 @@ export default function Import() {
   // Fetch forms when business is selected
   const fetchForms = async (businessId: string) => {
     try {
-      const response = await axios.get(`/api/meta/forms?pageId=${businessId}`);
+      const response = await axios.get(`${getApiBaseUrl()}/api/meta/forms?pageId=${businessId}`, {
+        headers: getAuthHeaders()
+      });
       setMetaForms(response.data.data);
     } catch (error: any) {
       console.error('Failed to fetch forms:', error);
@@ -129,9 +155,11 @@ export default function Import() {
     setImportResult(null);
     
     try {
-      const response = await axios.post('/api/leads/import/meta', {
+      const response = await axios.post(`${getApiBaseUrl()}/api/leads/import/meta`, {
         formId: selectedForm,
         businessId: selectedBusiness
+      }, {
+        headers: getAuthHeaders()
       });
       setImportResult(response.data);
       queryClient.invalidateQueries({ queryKey: ['leads'] });

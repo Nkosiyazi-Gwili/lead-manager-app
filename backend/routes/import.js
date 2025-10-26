@@ -1,6 +1,5 @@
 const express = require('express');
 const axios = require('axios');
-const Lead = require('../models/Lead');
 const router = express.Router();
 
 // Import auth middleware
@@ -77,15 +76,6 @@ router.get('/businesses', async (req, res) => {
       });
     }
 
-    // For demo purposes, return mock business data
-    // In production, you would call the Meta API:
-    // const response = await axios.get(`https://graph.facebook.com/v19.0/me/businesses`, {
-    //   params: {
-    //     access_token: metaConfig.accessToken,
-    //     fields: 'id,name,verification_status'
-    //   }
-    // });
-
     // Mock business data for demo
     const mockBusinesses = [
       {
@@ -151,15 +141,6 @@ router.get('/forms', async (req, res) => {
       });
     }
 
-    // For demo purposes, return mock form data
-    // In production, you would call the Meta API:
-    // const response = await axios.get(`https://graph.facebook.com/v19.0/${pageId}/leadgen_forms`, {
-    //   params: {
-    //     access_token: metaConfig.accessToken,
-    //     fields: 'id,name,leads_count,status'
-    //   }
-    // });
-
     // Mock form data for demo
     const mockForms = [
       {
@@ -215,110 +196,5 @@ router.get('/forms', async (req, res) => {
     });
   }
 });
-
-// @desc    Import leads from Meta form
-// @route   POST /api/leads/import/meta
-// @access  Private
-router.post('/import/meta', async (req, res) => {
-  try {
-    const { formId, businessId } = req.body;
-
-    if (!formId) {
-      return res.status(400).json({
-        success: false,
-        message: 'Form ID is required'
-      });
-    }
-
-    // For demo purposes, generate mock leads
-    // In production, you would call the Meta API to get actual leads:
-    // const response = await axios.get(`https://graph.facebook.com/v19.0/${formId}/leads`, {
-    //   params: {
-    //     access_token: metaConfig.accessToken
-    //   }
-    // });
-
-    // Generate mock leads data
-    const mockLeads = generateMockMetaLeads(10); // Generate 10 mock leads
-
-    // Save leads to database
-    const savedLeads = [];
-    const errors = [];
-
-    for (const leadData of mockLeads) {
-      try {
-        const lead = await Lead.create({
-          ...leadData,
-          leadSource: 'meta_business',
-          createdBy: req.user._id
-        });
-
-        const populatedLead = await Lead.findById(lead._id)
-          .populate('createdBy', 'name email');
-
-        savedLeads.push(populatedLead);
-      } catch (error) {
-        errors.push(`Failed to save lead: ${leadData.emailAddress} - ${error.message}`);
-      }
-    }
-
-    res.json({
-      success: true,
-      message: `Successfully imported ${savedLeads.length} leads from Meta`,
-      leads: savedLeads,
-      errors: errors.length > 0 ? errors : undefined
-    });
-
-  } catch (error) {
-    console.error('Meta import error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Failed to import leads from Meta',
-      leads: [],
-      errors: [error.message]
-    });
-  }
-});
-
-// Helper function to generate mock Meta leads
-function generateMockMetaLeads(count) {
-  const firstNames = ['John', 'Sarah', 'Mike', 'Lisa', 'David', 'Emma', 'James', 'Olivia'];
-  const lastNames = ['Smith', 'Johnson', 'Williams', 'Brown', 'Jones', 'Garcia', 'Miller'];
-  const companies = ['Tech Solutions', 'Global Corp', 'Innovate Ltd', 'Future Inc', 'Smart Co'];
-  const industries = ['Technology', 'Finance', 'Healthcare', 'Education', 'Retail'];
-  
-  const leads = [];
-
-  for (let i = 0; i < count; i++) {
-    const firstName = firstNames[Math.floor(Math.random() * firstNames.length)];
-    const lastName = lastNames[Math.floor(Math.random() * lastNames.length)];
-    const company = companies[Math.floor(Math.random() * companies.length)];
-    const industry = industries[Math.floor(Math.random() * industries.length)];
-
-    leads.push({
-      companyTradingName: `${company} ${Math.random() > 0.5 ? 'SA' : 'Pty Ltd'}`,
-      companyRegisteredName: `${company} (Pty) Ltd`,
-      name: firstName,
-      surname: lastName,
-      emailAddress: `${firstName.toLowerCase()}.${lastName.toLowerCase()}@${company.toLowerCase().replace(/\s+/g, '')}.com`,
-      mobileNumber: `+27${Math.floor(60 + Math.random() * 40)}${Math.floor(1000000 + Math.random() * 9000000)}`,
-      telephoneNumber: `+27${Math.floor(10 + Math.random() * 10)}${Math.floor(1000000 + Math.random() * 9000000)}`,
-      industry: industry,
-      numberOfEmployees: Math.floor(Math.random() * 100) + 1,
-      bbbeeLevel: `Level ${Math.floor(Math.random() * 8) + 1}`,
-      leadStatus: 'new',
-      leadSource: 'meta_business',
-      metaAdId: `ad_${Math.floor(100000000000000 + Math.random() * 900000000000000)}`,
-      metaFormId: `form_${Math.floor(100000000000000 + Math.random() * 900000000000000)}`,
-      metaData: {
-        campaign_name: `Meta_Campaign_${Math.floor(Math.random() * 10) + 1}`,
-        ad_name: `Lead_Ad_${i + 1}`,
-        form_name: 'Contact_Form'
-      }
-    });
-  }
-
-  return leads;
-}
 
 module.exports = router;
