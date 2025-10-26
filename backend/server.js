@@ -64,6 +64,17 @@ app.use('/api/reports', reportsRoutes);
 app.use('/api/meta', metaRoutes);
 app.use('/api/leads/import', importRoutes);
 
+// Root endpoint
+app.get('/', (req, res) => {
+  res.json({
+    success: true,
+    message: 'Smart Register Backend API',
+    version: '1.0.0',
+    timestamp: new Date().toISOString(),
+    environment: process.env.NODE_ENV
+  });
+});
+
 // Health check with CORS
 app.get('/api/health', (req, res) => {
   const origin = req.headers.origin;
