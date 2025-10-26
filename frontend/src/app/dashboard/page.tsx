@@ -14,11 +14,15 @@ const COLORS = ['#0088FE', '#00C49F', '#FFBB28', '#FF8042', '#8884D8', '#82ca9d'
 export default function Dashboard() {
   const { data: stats, isLoading } = useQuery({
     queryKey: ['dashboard-stats'],
-    queryFn: async () => {
-      const response = await axios.get('/api/reports/dashboard');
-      return response.data;
-    }
-  });
+      queryFn: async () => {
+        const response = await axios.get('http://localhost:5000/api/reports/dashboard', {
+          headers: {
+            Authorization: `Bearer ${localStorage.getItem('token')}`
+          }
+        });
+        return response.data.data; // Return the data object directly
+      }
+  })
 
   const statusData = stats?.statusCounts ? Object.entries(stats.statusCounts).map(([name, value]) => ({
     name: name.charAt(0).toUpperCase() + name.slice(1).replace('_', ' '),

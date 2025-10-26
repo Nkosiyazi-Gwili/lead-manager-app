@@ -68,6 +68,19 @@ interface UsersResponse {
   data: any[];
 }
 
+// Remove the import and add these helper functions instead
+const getApiBaseUrl = () => {
+  return process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000';
+};
+
+const getAuthHeaders = () => {
+  if (typeof window !== 'undefined') {
+    const token = localStorage.getItem('token');
+    return token ? { Authorization: `Bearer ${token}` } : {};
+  }
+  return {};
+};
+
 export default function Leads() {
   const { user } = useAuth();
   const queryClient = useQueryClient();
@@ -87,7 +100,10 @@ export default function Leads() {
   const { data: leadsData, isLoading } = useQuery<LeadsResponse>({
     queryKey: ['leads', filters],
     queryFn: async () => {
-      const response = await axios.get('/api/leads', { params: filters });
+      const response = await axios.get(`${getApiBaseUrl()}/api/leads`, { 
+        params: filters,
+        headers: getAuthHeaders()
+      });
       return response.data;
     }
   });
@@ -95,7 +111,9 @@ export default function Leads() {
   const { data: usersData } = useQuery<UsersResponse>({
     queryKey: ['users-for-assignment'],
     queryFn: async () => {
-      const response = await axios.get('/api/users/role/sales_agent');
+      const response = await axios.get(`${getApiBaseUrl()}/api/users/role/sales_agent`, {
+        headers: getAuthHeaders()
+      });
       return response.data;
     },
     enabled: user?.role === 'admin' || user?.role === 'sales_manager'
@@ -103,7 +121,11 @@ export default function Leads() {
 
   const updateStatusMutation = useMutation({
     mutationFn: async ({ leadId, status }: { leadId: string; status: string }) => {
-      const response = await axios.patch(`/api/leads/${leadId}/status`, { status });
+      const response = await axios.patch(
+        `${getApiBaseUrl()}/api/leads/${leadId}/status`, 
+        { status },
+        { headers: getAuthHeaders() }
+      );
       return response.data;
     },
     onSuccess: () => {
@@ -117,7 +139,11 @@ export default function Leads() {
 
   const assignLeadMutation = useMutation({
     mutationFn: async ({ leadId, assignedTo }: { leadId: string; assignedTo: string }) => {
-      const response = await axios.patch(`/api/leads/${leadId}/assign`, { assignedTo });
+      const response = await axios.patch(
+        `${getApiBaseUrl()}/api/leads/${leadId}/assign`, 
+        { assignedTo },
+        { headers: getAuthHeaders() }
+      );
       return response.data;
     },
     onSuccess: () => {
@@ -131,7 +157,11 @@ export default function Leads() {
 
   const addNoteMutation = useMutation({
     mutationFn: async ({ leadId, content }: { leadId: string; content: string }) => {
-      const response = await axios.post(`/api/leads/${leadId}/notes`, { content });
+      const response = await axios.post(
+        `${getApiBaseUrl()}/api/leads/${leadId}/notes`, 
+        { content },
+        { headers: getAuthHeaders() }
+      );
       return response.data;
     },
     onSuccess: () => {
@@ -148,7 +178,11 @@ export default function Leads() {
 
   const addLeadMutation = useMutation({
     mutationFn: async (leadData: any) => {
-      const response = await axios.post('/api/leads', leadData);
+      const response = await axios.post(
+        `${getApiBaseUrl()}/api/leads`, 
+        leadData,
+        { headers: getAuthHeaders() }
+      );
       return response.data;
     },
     onSuccess: () => {
@@ -163,7 +197,11 @@ export default function Leads() {
 
   const updateLeadMutation = useMutation({
     mutationFn: async (leadData: any) => {
-      const response = await axios.put(`/api/leads/${leadData._id}`, leadData);
+      const response = await axios.put(
+        `${getApiBaseUrl()}/api/leads/${leadData._id}`, 
+        leadData,
+        { headers: getAuthHeaders() }
+      );
       return response.data;
     },
     onSuccess: () => {
@@ -690,38 +728,6 @@ function EditLeadModal({ lead, onSave, onClose, isLoading }: {
   );
 }
 
-// Helper Components
-function DetailRow({ label, value }: { label: string; value: any }) {
-  return (
-    <div className="flex justify-between">
-      <span className="font-medium text-gray-700">{label}:</span>
-      <span className="text-gray-900">{value || 'N/A'}</span>
-    </div>
-  );
-}
-
-function FormField({ label, type, value, onChange }: {
-  label: string;
-  type: string;
-  value: string;
-  onChange: (e: React.ChangeEvent<HTMLInputElement>) => void;
-}) {
-  return (
-    <div>
-      <label className="block text-sm font-medium text-gray-700 mb-1">{label}</label>
-      <input
-        type={type}
-        value={value}
-        onChange={onChange}
-        className="w-full border rounded px-3 py-2 focus:outline-none focus:ring-1 focus:ring-blue-500"
-      />
-    </div>
-  );
-}
-
-// Keep the existing AddLeadModal and NotesModal components...
-// (They remain the same as in the previous version)
-
 // Add Lead Modal Component
 function AddLeadModal({ onSave, onClose, isLoading }: { 
   onSave: (leadData: any) => void; 
@@ -898,6 +904,35 @@ function NotesModal({ lead, onSave, onClose, note, setNote, isLoading }: {
           </button>
         </div>
       </div>
+    </div>
+  );
+}
+
+// Helper Components
+function DetailRow({ label, value }: { label: string; value: any }) {
+  return (
+    <div className="flex justify-between">
+      <span className="font-medium text-gray-700">{label}:</span>
+      <span className="text-gray-900">{value || 'N/A'}</span>
+    </div>
+  );
+}
+
+function FormField({ label, type, value, onChange }: {
+  label: string;
+  type: string;
+  value: string;
+  onChange: (e: React.ChangeEvent<HTMLInputElement>) => void;
+}) {
+  return (
+    <div>
+      <label className="block text-sm font-medium text-gray-700 mb-1">{label}</label>
+      <input
+        type={type}
+        value={value}
+        onChange={onChange}
+        className="w-full border rounded px-3 py-2 focus:outline-none focus:ring-1 focus:ring-blue-500"
+      />
     </div>
   );
 }

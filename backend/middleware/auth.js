@@ -1,9 +1,9 @@
 const jwt = require('jsonwebtoken');
 const User = require('../models/User');
 
-const JWT_SECRET = process.env.JWT_SECRET || 'fallback_secret_change_in_production';
+const JWT_SECRET = process.env.JWT_SECRET || 'your-super-secret-jwt-key-change-in-production';
 
-exports.protect = async (req, res, next) => {
+const protect = async (req, res, next) => {
   try {
     let token;
 
@@ -18,40 +18,32 @@ exports.protect = async (req, res, next) => {
       });
     }
 
-    try {
-      // Verify token
-      const decoded = jwt.verify(token, JWT_SECRET);
-      
-      // Get user from token
-      const user = await User.findById(decoded.userId);
-      
-      if (!user) {
-        return res.status(401).json({
-          success: false,
-          message: 'User not found'
-        });
-      }
-
-      if (!user.isActive) {
-        return res.status(401).json({
-          success: false,
-          message: 'User account is deactivated'
-        });
-      }
-
-      req.user = user;
-      next();
-    } catch (error) {
+    const decoded = jwt.verify(token, JWT_SECRET);
+    const user = await User.findById(decoded.userId);
+    
+    if (!user) {
       return res.status(401).json({
         success: false,
-        message: 'Not authorized to access this route'
+        message: 'User not found'
       });
     }
+
+    if (!user.isActive) {
+      return res.status(401).json({
+        success: false,
+        message: 'User account is deactivated'
+      });
+    }
+
+    req.user = user;
+    next();
   } catch (error) {
     console.error('Auth middleware error:', error);
-    res.status(500).json({
+    return res.status(401).json({
       success: false,
-      message: 'Server error in authentication'
+      message: 'Not authorized to access this route'
     });
   }
 };
+
+module.exports = protect;

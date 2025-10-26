@@ -25,6 +25,19 @@ interface Filters {
   search: string;
 }
 
+// Helper functions for API calls
+const getApiBaseUrl = () => {
+  return process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000';
+};
+
+const getAuthHeaders = () => {
+  if (typeof window !== 'undefined') {
+    const token = localStorage.getItem('token');
+    return token ? { Authorization: `Bearer ${token}` } : {};
+  }
+  return {};
+};
+
 export default function Users() {
   const { user: currentUser } = useAuth();
   const queryClient = useQueryClient();
@@ -61,14 +74,20 @@ export default function Users() {
       if (filters.status) params.status = filters.status;
       if (debouncedSearch) params.search = debouncedSearch;
 
-      const response = await axios.get('/api/users', { params });
-      return response.data;
+      const response = await axios.get(`${getApiBaseUrl()}/api/users`, { 
+        params,
+        headers: getAuthHeaders()
+      });
+      return response.data.data || response.data;
     },
     staleTime: 1000 * 60 * 5, // 5 minutes
   });
 
   const updateUserMutation = useMutation({
-    mutationFn: (userData: any) => axios.put(`/api/users/${userData._id}`, userData),
+    mutationFn: (userData: any) => 
+      axios.put(`${getApiBaseUrl()}/api/users/${userData._id}`, userData, {
+        headers: getAuthHeaders()
+      }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['users'] });
       setShowEditModal(false);
@@ -77,7 +96,10 @@ export default function Users() {
   });
 
   const deleteUserMutation = useMutation({
-    mutationFn: (userId: string) => axios.delete(`/api/users/${userId}`),
+    mutationFn: (userId: string) => 
+      axios.delete(`${getApiBaseUrl()}/api/users/${userId}`, {
+        headers: getAuthHeaders()
+      }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['users'] });
       setShowDeleteModal(false);
@@ -86,7 +108,10 @@ export default function Users() {
   });
 
   const addUserMutation = useMutation({
-    mutationFn: (userData: any) => axios.post('/api/auth/register', userData),
+    mutationFn: (userData: any) => 
+      axios.post(`${getApiBaseUrl()}/api/auth/register`, userData, {
+        headers: getAuthHeaders()
+      }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['users'] });
       setShowAddModal(false);
@@ -450,9 +475,6 @@ export default function Users() {
   );
 }
 
-// Keep the existing AddUserModal, EditUserModal, and DeleteUserModal components...
-// (They remain the same as in the previous version)
-
 // Add User Modal Component
 function AddUserModal({ onSave, onClose, isLoading }: { 
   onSave: (userData: any) => void; 
@@ -640,7 +662,7 @@ function AddUserModal({ onSave, onClose, isLoading }: {
   );
 }
 
-// Edit User Modal Component (keep the existing one)
+// Edit User Modal Component
 function EditUserModal({ user, onSave, onClose, isLoading }: { 
   user: User; 
   onSave: (userData: any) => void; 
@@ -748,7 +770,7 @@ function EditUserModal({ user, onSave, onClose, isLoading }: {
   );
 }
 
-// Delete User Modal Component (keep the existing one)
+// Delete User Modal Component
 function DeleteUserModal({ user, onConfirm, onClose, isLoading }: { 
   user: User; 
   onConfirm: () => void; 

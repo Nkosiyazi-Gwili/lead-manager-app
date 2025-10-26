@@ -1,41 +1,77 @@
 const express = require('express');
 const Lead = require('../models/Lead');
-const User = require('../models/User');
-const { auth, authorize } = require('../middleware/auth');
-
 const router = express.Router();
 
-// Dashboard statistics
-router.get('/dashboard', auth, async (req, res) => {
-  try {
-    let leadFilter = {};
-    
-    // Role-based filtering
-    if (req.user.role === 'sales_agent' || req.user.role === 'marketing_agent') {
-      leadFilter.assignedTo = req.user.id;
-    }
+// Import auth middleware
+const protect = require('../middleware/auth'); // Changed from auth
 
-    const [
-      totalLeads,
-      statusCounts,
-      sourceCounts,
-      myLeads
-    ] = await Promise.all([
-      Lead.countDocuments(leadFilter),
-      Lead.aggregate([
-        { $match: leadFilter },
-        { $group: { _id: '$leadStatus', count: { $sum: 1 } } }
-      ]),
-      Lead.aggregate([
-        { $match: leadFilter },
-        { $group: { _id: '$leadSource', count: { $sum: 1 } } }
-      ]),
-      req.user.role === 'sales_agent' || req.user.role === 'marketing_agent' 
-        ? Lead.countDocuments({ assignedTo: req.user.id })
-        : Promise.resolve(0)
+// Apply auth middleware to all routes
+router.use(protect); // Changed from auth
+
+// @desc    Get dashboard statistics
+// @route   GET /api/reports/dashboard
+// @access  Private
+router.get('/dashboard', async (req, res) => {
+  try {
+    const userId = req.user._id;
+    const userRole = req.user.role;
+
+    // Get total leads count
+    const totalLeads = await Lead.countDocuments();
+
+    // Get leads by status
+    const statusCounts = await Lead.aggregate([
+      {
+        $group: {
+          _id: '$leadStatus',
+          count: { $sum: 1 }
+        }
+      }
     ]);
 
-    // Convert arrays to objects
+    // Get leads by source
+    const sourceCounts = await Lead.aggregate([
+      {
+        $group: {
+          _id: '$leadSource',
+          count: { $sum: 1 }
+        }
+      }
+    ]);
+
+    // Get user's assigned leads
+    let myLeadsQuery = { assignedTo: userId };
+    
+    // If user is admin or manager, show all leads assigned to their team
+    if (userRole === 'admin' || userRole === 'sales_manager' || userRole === 'marketing_manager') {
+      // For managers, get leads assigned to their department
+      if (userRole === 'sales_manager') {
+        const salesAgents = await User.find({ role: 'sales_agent' }).select('_id');
+        myLeadsQuery = { 
+          assignedTo: { $in: salesAgents.map(agent => agent._id) } 
+        };
+      } else if (userRole === 'marketing_manager') {
+        const marketingAgents = await User.find({ role: 'marketing_agent' }).select('_id');
+        myLeadsQuery = { 
+          assignedTo: { $in: marketingAgents.map(agent => agent._id) } 
+        };
+      } else {
+        // Admin can see all assigned leads
+        myLeadsQuery = { assignedTo: { $ne: null } };
+      }
+    }
+
+    const myLeads = await Lead.countDocuments(myLeadsQuery);
+
+    // Calculate conversion rate (closed_won / total contacted leads)
+    const contactedLeads = await Lead.countDocuments({
+      leadStatus: { $in: ['contacted', 'qualified', 'proposal', 'negotiation', 'closed_won', 'closed_lost'] }
+    });
+    
+    const wonLeads = await Lead.countDocuments({ leadStatus: 'closed_won' });
+    const conversionRate = contactedLeads > 0 ? ((wonLeads / contactedLeads) * 100).toFixed(1) : 0;
+
+    // Format the data for frontend
     const statusCountsObj = {};
     statusCounts.forEach(item => {
       statusCountsObj[item._id] = item.count;
@@ -46,86 +82,23 @@ router.get('/dashboard', auth, async (req, res) => {
       sourceCountsObj[item._id] = item.count;
     });
 
-    // Calculate conversion rate
-    const wonLeads = statusCountsObj['closed_won'] || 0;
-    const totalClosed = wonLeads + (statusCountsObj['closed_lost'] || 0);
-    const conversionRate = totalClosed > 0 ? ((wonLeads / totalClosed) * 100).toFixed(2) : 0;
-
     res.json({
-      totalLeads,
-      statusCounts: statusCountsObj,
-      sourceCounts: sourceCountsObj,
-      myLeads,
-      conversionRate
+      success: true,
+      data: {
+        totalLeads,
+        statusCounts: statusCountsObj,
+        sourceCounts: sourceCountsObj,
+        myLeads,
+        conversionRate
+      }
     });
+
   } catch (error) {
-    res.status(500).json({ message: error.message });
-  }
-});
-
-// Lead conversion report
-router.get('/conversion', auth, authorize('admin', 'sales_manager', 'marketing_manager'), async (req, res) => {
-  try {
-    const conversionReport = await Lead.aggregate([
-      {
-        $group: {
-          _id: '$leadStatus',
-          count: { $sum: 1 },
-          avgCreationTime: { $avg: { $subtract: ['$updatedAt', '$createdAt'] } }
-        }
-      }
-    ]);
-
-    res.json(conversionReport);
-  } catch (error) {
-    res.status(500).json({ message: error.message });
-  }
-});
-
-// Agent performance report
-router.get('/agent-performance', auth, authorize('admin', 'sales_manager'), async (req, res) => {
-  try {
-    const agentPerformance = await Lead.aggregate([
-      {
-        $match: { assignedTo: { $ne: null } }
-      },
-      {
-        $group: {
-          _id: '$assignedTo',
-          totalLeads: { $sum: 1 },
-          wonLeads: { $sum: { $cond: [{ $eq: ['$leadStatus', 'closed_won'] }, 1, 0] } },
-          lostLeads: { $sum: { $cond: [{ $eq: ['$leadStatus', 'closed_lost'] }, 1, 0] } },
-          avgResponseTime: { $avg: { $subtract: ['$updatedAt', '$createdAt'] } }
-        }
-      },
-      {
-        $lookup: {
-          from: 'users',
-          localField: '_id',
-          foreignField: '_id',
-          as: 'agent'
-        }
-      },
-      {
-        $unwind: '$agent'
-      },
-      {
-        $project: {
-          'agent.name': 1,
-          'agent.email': 1,
-          'agent.role': 1,
-          totalLeads: 1,
-          wonLeads: 1,
-          lostLeads: 1,
-          conversionRate: { $multiply: [{ $divide: ['$wonLeads', '$totalLeads'] }, 100] },
-          avgResponseTime: 1
-        }
-      }
-    ]);
-
-    res.json(agentPerformance);
-  } catch (error) {
-    res.status(500).json({ message: error.message });
+    console.error('Dashboard stats error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error fetching dashboard statistics'
+    });
   }
 });
 
