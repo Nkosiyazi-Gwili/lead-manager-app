@@ -2,15 +2,35 @@
 require('dotenv').config();
 const express = require('express');
 const mongoose = require('mongoose');
-const cors = require('cors');
 
 const app = express();
 
-// CORS
+// In your server.js, update CORS configuration
+const cors = require('cors');
+
+const allowedOrigins = [
+  'https://lead-manager-app-psi.vercel.app',
+  'http://localhost:3000',
+];
+
 app.use(cors({
-  origin: ['http://localhost:3000', 'https://lead-manager-app-psi.vercel.app'],
-  credentials: true
+  origin: function (origin, callback) {
+    // Allow requests with no origin (like mobile apps or curl requests)
+    if (!origin) return callback(null, true);
+    
+    if (allowedOrigins.indexOf(origin) === -1) {
+      const msg = 'The CORS policy for this site does not allow access from the specified Origin.';
+      return callback(new Error(msg), false);
+    }
+    return callback(null, true);
+  },
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept', 'Origin']
 }));
+
+// Handle preflight requests
+app.options('*', cors());
 
 app.use(express.json());
 
@@ -43,6 +63,16 @@ app.get('/api/health', (req, res) => {
     success: true, 
     message: 'Server is running',
     timestamp: new Date().toISOString()
+  });
+});
+
+// Add to your server.js
+app.get('/api/test', (req, res) => {
+  res.json({
+    success: true,
+    message: 'Backend is working!',
+    timestamp: new Date().toISOString(),
+    environment: process.env.NODE_ENV || 'development'
   });
 });
 
