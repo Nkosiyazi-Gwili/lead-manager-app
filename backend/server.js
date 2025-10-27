@@ -40,39 +40,90 @@ if (!MONGODB_URI) {
   console.error('❌ MONGODB_URI is not defined in environment variables');
 }
 
-// MongoDB connection with connection caching for serverless
-let isConnected = false;
+// Global connection state
+let isConnecting = false;
+let connectionRetries = 0;
+const MAX_RETRIES = 3;
 
 const connectDB = async () => {
-  if (isConnected) {
-    console.log('✅ Using existing MongoDB connection');
-    return;
+  // If already connected, return
+  if (mongoose.connection.readyState === 1) {
+    console.log('✅ MongoDB already connected');
+    return true;
   }
 
+  // If already connecting, wait
+  if (isConnecting) {
+    console.log('🔄 MongoDB connection in progress...');
+    return new Promise((resolve) => {
+      const checkConnection = () => {
+        if (mongoose.connection.readyState === 1) {
+          resolve(true);
+        } else {
+          setTimeout(checkConnection, 100);
+        }
+      };
+      checkConnection();
+    });
+  }
+
+  isConnecting = true;
+
   try {
-    if (MONGODB_URI) {
-      await mongoose.connect(MONGODB_URI);
-      isConnected = true;
-      console.log('✅ MongoDB Connected');
-      
-      mongoose.connection.on('error', err => {
-        console.error('❌ MongoDB connection error:', err);
-        isConnected = false;
-      });
-      
-      mongoose.connection.on('disconnected', () => {
-        console.log('❌ MongoDB disconnected');
-        isConnected = false;
-      });
-    } else {
-      console.log('❌ MongoDB URI not available');
+    console.log('🔄 Attempting MongoDB connection...');
+    
+    // Updated connection options for Mongoose 6+
+    await mongoose.connect(MONGODB_URI, {
+      serverSelectionTimeoutMS: 30000,
+      socketTimeoutMS: 45000,
+      maxPoolSize: 10,
+      // Remove deprecated options
+    });
+    
+    console.log('✅ MongoDB Connected successfully');
+    connectionRetries = 0;
+    isConnecting = false;
+    return true;
+    
+  } catch (error) {
+    console.error('❌ MongoDB connection failed:', error.message);
+    connectionRetries++;
+    isConnecting = false;
+    
+    if (connectionRetries < MAX_RETRIES) {
+      console.log(`🔄 Retrying connection (${connectionRetries}/${MAX_RETRIES})...`);
+      setTimeout(connectDB, 2000);
     }
-  } catch (err) {
-    console.error('❌ MongoDB connection error:', err);
-    isConnected = false;
-    throw err;
+    
+    return false;
   }
 };
+
+// Connection event handlers
+mongoose.connection.on('connected', () => {
+  console.log('✅ MongoDB connected');
+});
+
+mongoose.connection.on('error', (err) => {
+  console.error('❌ MongoDB connection error:', err);
+});
+
+mongoose.connection.on('disconnected', () => {
+  console.log('❌ MongoDB disconnected');
+});
+
+mongoose.connection.on('reconnected', () => {
+  console.log('✅ MongoDB reconnected');
+});
+
+// Initial connection
+connectDB().then(connected => {
+  if (connected) {
+    console.log('🚀 MongoDB connection established');
+  } else {
+    console.log('❌ MongoDB connection failed');
+  }
+});
 
 // Import routes with error handling
 let authRoutes, leadsRoutes, usersRoutes, reportsRoutes, metaRoutes, importRoutes;
@@ -112,25 +163,45 @@ app.get('/', (req, res) => {
   });
 });
 
-// Health check
+// Health check with DB connection test
 app.get('/api/health', async (req, res) => {
   try {
-    await connectDB();
+    const dbConnected = await connectDB();
     res.json({ 
       success: true, 
       message: 'Server is running',
       timestamp: new Date().toISOString(),
       environment: process.env.NODE_ENV,
-      mongodb: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected'
+      mongodb: {
+        connected: dbConnected,
+        state: mongoose.connection.readyState,
+        stateText: getConnectionStateText(mongoose.connection.readyState)
+      }
     });
   } catch (error) {
     res.status(500).json({
       success: false,
       message: 'Server error',
-      error: error.message
+      error: error.message,
+      mongodb: {
+        connected: false,
+        state: mongoose.connection.readyState,
+        stateText: getConnectionStateText(mongoose.connection.readyState)
+      }
     });
   }
 });
+
+// Helper function for connection state
+function getConnectionStateText(state) {
+  switch (state) {
+    case 0: return 'disconnected';
+    case 1: return 'connected';
+    case 2: return 'connecting';
+    case 3: return 'disconnecting';
+    default: return 'unknown';
+  }
+}
 
 // Test endpoint
 app.get('/api/test-cors', (req, res) => {
@@ -160,11 +231,20 @@ app.use('*', (req, res) => {
   });
 });
 
-// Serverless function handler
+// Serverless function handler with connection management
 module.exports = async (req, res) => {
   try {
-    // Connect to DB on cold start
-    await connectDB();
+    // Ensure DB connection is active for each request
+    const dbConnected = await connectDB();
+    
+    if (!dbConnected) {
+      return res.status(503).json({
+        success: false,
+        message: 'Database connection unavailable. Please try again.',
+        mongodbState: mongoose.connection.readyState
+      });
+    }
+    
     // Pass request to Express app
     return app(req, res);
   } catch (error) {

@@ -1,5 +1,7 @@
+// controllers/authController.js
 const User = require('../models/User');
 const jwt = require('jsonwebtoken');
+const mongoose = require('mongoose');
 
 const JWT_SECRET = process.env.JWT_SECRET || 'your-super-secret-jwt-key-change-in-production';
 const JWT_EXPIRE = process.env.JWT_EXPIRE || '7d';
@@ -9,12 +11,25 @@ const generateToken = (userId) => {
   return jwt.sign({ userId }, JWT_SECRET, { expiresIn: JWT_EXPIRE });
 };
 
+// Check MongoDB connection helper
+const checkDBConnection = () => {
+  return mongoose.connection.readyState === 1;
+};
+
 // @desc    Login user
 // @route   POST /api/auth/login
 // @access  Public
 exports.login = async (req, res) => {
   try {
     const { email, password } = req.body;
+
+    // Check MongoDB connection
+    if (!checkDBConnection()) {
+      return res.status(503).json({
+        success: false,
+        message: 'Database connection not available. Please try again.'
+      });
+    }
 
     // Validate input
     if (!email || !password) {
@@ -72,6 +87,15 @@ exports.login = async (req, res) => {
 
   } catch (error) {
     console.error('Login error:', error);
+    
+    // Handle MongoDB timeout errors
+    if (error.name === 'MongooseError' || error.message.includes('buffering timed out')) {
+      return res.status(503).json({
+        success: false,
+        message: 'Database connection timeout. Please try again.'
+      });
+    }
+    
     res.status(500).json({
       success: false,
       message: 'Server error during login'
@@ -84,6 +108,14 @@ exports.login = async (req, res) => {
 // @access  Private
 exports.getMe = async (req, res) => {
   try {
+    // Check MongoDB connection
+    if (!checkDBConnection()) {
+      return res.status(503).json({
+        success: false,
+        message: 'Database connection not available. Please try again.'
+      });
+    }
+
     const user = await User.findById(req.user._id);
     
     if (!user) {
@@ -100,6 +132,14 @@ exports.getMe = async (req, res) => {
 
   } catch (error) {
     console.error('Get me error:', error);
+    
+    if (error.name === 'MongooseError' || error.message.includes('buffering timed out')) {
+      return res.status(503).json({
+        success: false,
+        message: 'Database connection timeout. Please try again.'
+      });
+    }
+    
     res.status(500).json({
       success: false,
       message: 'Error fetching user profile'
