@@ -4,7 +4,7 @@ const nextConfig = {
     return [
       {
         source: '/api/:path*',
-        destination: 'https://lead-manager-backend-app-piyv.vercel.app/api/:path*',
+        destination: 'https://lead-manager-back-end-app-ltm9.vercel.app/api/:path*',
       },
     ];
   },
