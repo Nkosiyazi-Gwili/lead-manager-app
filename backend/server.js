@@ -8,10 +8,8 @@ const app = express();
 
 // CORS Configuration
 const allowedOrigins = [
-
   'https://lead-manager-app-psi.vercel.app',
   'http://localhost:3000',
-  
 ];
 
 app.use(cors({

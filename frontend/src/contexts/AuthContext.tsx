@@ -32,7 +32,7 @@ const getBackendUrl = () => {
     const isProduction = window.location.hostname.includes('vercel.app');
     
     if (isProduction) {
-      return 'https://lead-manager-back-end-app-ltm9.vercel.app';
+      return 'https://lead-manager-back-end-app-i5rw.vercel.app';
     }
   }
   

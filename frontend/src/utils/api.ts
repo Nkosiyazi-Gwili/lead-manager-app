@@ -1,7 +1,7 @@
 import axios from 'axios';
 
 // Configure axios base URL - POINT TO YOUR BACKEND
-axios.defaults.baseURL = 'https://lead-manager-backend-app-piyv.vercel.app';
+axios.defaults.baseURL = 'https://lead-manager-back-end-app-i5rw.vercel.app';
 //axios.defaults.withCredentials = true;
 
 // Add auth token to requests
