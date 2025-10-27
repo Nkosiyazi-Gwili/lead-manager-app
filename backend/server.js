@@ -2,7 +2,6 @@ require('dotenv').config();
 const express = require('express');
 const mongoose = require('mongoose');
 const cors = require('cors');
-const path = require('path');
 
 const app = express();
 
@@ -14,9 +13,7 @@ const allowedOrigins = [
 
 app.use(cors({
   origin: function (origin, callback) {
-    // Allow requests with no origin (like mobile apps or curl requests)
     if (!origin) return callback(null, true);
-    
     if (allowedOrigins.indexOf(origin) === -1) {
       const msg = 'The CORS policy for this site does not allow access from the specified Origin.';
       return callback(new Error(msg), false);
@@ -28,9 +25,6 @@ app.use(cors({
   allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With']
 }));
 
-// Handle preflight requests
-app.options('*', cors());
-
 app.use(express.json());
 
 // Debug middleware
@@ -39,32 +33,46 @@ app.use((req, res, next) => {
   next();
 });
 
-// MongoDB connection with better error handling
+// MongoDB connection
 const MONGODB_URI = process.env.MONGODB_URI;
 
 if (!MONGODB_URI) {
   console.error('❌ MONGODB_URI is not defined in environment variables');
 }
 
-// MongoDB connection with retry logic
+// MongoDB connection with connection caching for serverless
+let isConnected = false;
+
 const connectDB = async () => {
+  if (isConnected) {
+    console.log('✅ Using existing MongoDB connection');
+    return;
+  }
+
   try {
     if (MONGODB_URI) {
-      await mongoose.connect(MONGODB_URI, {
-        useNewUrlParser: true,
-        useUnifiedTopology: true,
-      });
+      await mongoose.connect(MONGODB_URI);
+      isConnected = true;
       console.log('✅ MongoDB Connected');
+      
+      mongoose.connection.on('error', err => {
+        console.error('❌ MongoDB connection error:', err);
+        isConnected = false;
+      });
+      
+      mongoose.connection.on('disconnected', () => {
+        console.log('❌ MongoDB disconnected');
+        isConnected = false;
+      });
     } else {
       console.log('❌ MongoDB URI not available');
     }
   } catch (err) {
     console.error('❌ MongoDB connection error:', err);
+    isConnected = false;
+    throw err;
   }
 };
-
-// Connect to MongoDB
-connectDB();
 
 // Import routes with error handling
 let authRoutes, leadsRoutes, usersRoutes, reportsRoutes, metaRoutes, importRoutes;
@@ -79,20 +87,10 @@ try {
   console.log('✅ All routes loaded successfully');
 } catch (error) {
   console.error('❌ Error loading routes:', error.message);
-  // Create simple fallback routes if module loading fails
-  authRoutes = express.Router();
-  leadsRoutes = express.Router();
-  usersRoutes = express.Router();
-  reportsRoutes = express.Router();
-  metaRoutes = express.Router();
-  importRoutes = express.Router();
-  
-  // Add basic health check to all routes
-  [authRoutes, leadsRoutes, usersRoutes, reportsRoutes, metaRoutes, importRoutes].forEach(router => {
-    router.get('/health', (req, res) => {
-      res.json({ status: 'Route module loading failed - using fallback' });
-    });
-  });
+  // Create simple fallback routes
+  const router = express.Router();
+  router.get('/health', (req, res) => res.json({ status: 'fallback' }));
+  authRoutes = leadsRoutes = usersRoutes = reportsRoutes = metaRoutes = importRoutes = router;
 }
 
 // Use routes
@@ -115,14 +113,23 @@ app.get('/', (req, res) => {
 });
 
 // Health check
-app.get('/api/health', (req, res) => {
-  res.json({ 
-    success: true, 
-    message: 'Server is running',
-    timestamp: new Date().toISOString(),
-    environment: process.env.NODE_ENV,
-    mongodb: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected'
-  });
+app.get('/api/health', async (req, res) => {
+  try {
+    await connectDB();
+    res.json({ 
+      success: true, 
+      message: 'Server is running',
+      timestamp: new Date().toISOString(),
+      environment: process.env.NODE_ENV,
+      mongodb: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected'
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: 'Server error',
+      error: error.message
+    });
+  }
 });
 
 // Test endpoint
@@ -153,15 +160,28 @@ app.use('*', (req, res) => {
   });
 });
 
-// Export for Vercel serverless
-module.exports = app;
+// Serverless function handler
+module.exports = async (req, res) => {
+  try {
+    // Connect to DB on cold start
+    await connectDB();
+    // Pass request to Express app
+    return app(req, res);
+  } catch (error) {
+    console.error('Serverless function error:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Server initialization failed',
+      error: error.message
+    });
+  }
+};
 
 // Only listen locally in development
-if (process.env.NODE_ENV !== 'production') {
+if (process.env.NODE_ENV !== 'production' && require.main === module) {
   const PORT = process.env.PORT || 5000;
   app.listen(PORT, '0.0.0.0', () => {
     console.log(`🚀 Server running on port ${PORT}`);
     console.log(`🔗 Health check: http://localhost:${PORT}/api/health`);
-    console.log(`✅ CORS enabled for:`, allowedOrigins);
   });
 }
