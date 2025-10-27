@@ -2,6 +2,7 @@ require('dotenv').config();
 const express = require('express');
 const mongoose = require('mongoose');
 const cors = require('cors');
+const path = require('path');
 
 const app = express();
 
@@ -43,7 +44,6 @@ const MONGODB_URI = process.env.MONGODB_URI;
 
 if (!MONGODB_URI) {
   console.error('❌ MONGODB_URI is not defined in environment variables');
-  // Don't exit in serverless, just log the error
 }
 
 // MongoDB connection with retry logic
@@ -66,13 +66,34 @@ const connectDB = async () => {
 // Connect to MongoDB
 connectDB();
 
-// Import routes
-const authRoutes = require('./routes/auth');
-const leadsRoutes = require('./routes/leads');
-const usersRoutes = require('./routes/users');
-const reportsRoutes = require('./routes/reports');
-const metaRoutes = require('./routes/meta');
-const importRoutes = require('./routes/import');
+// Import routes with error handling
+let authRoutes, leadsRoutes, usersRoutes, reportsRoutes, metaRoutes, importRoutes;
+
+try {
+  authRoutes = require('./routes/auth');
+  leadsRoutes = require('./routes/leads');
+  usersRoutes = require('./routes/users');
+  reportsRoutes = require('./routes/reports');
+  metaRoutes = require('./routes/meta');
+  importRoutes = require('./routes/import');
+  console.log('✅ All routes loaded successfully');
+} catch (error) {
+  console.error('❌ Error loading routes:', error.message);
+  // Create simple fallback routes if module loading fails
+  authRoutes = express.Router();
+  leadsRoutes = express.Router();
+  usersRoutes = express.Router();
+  reportsRoutes = express.Router();
+  metaRoutes = express.Router();
+  importRoutes = express.Router();
+  
+  // Add basic health check to all routes
+  [authRoutes, leadsRoutes, usersRoutes, reportsRoutes, metaRoutes, importRoutes].forEach(router => {
+    router.get('/health', (req, res) => {
+      res.json({ status: 'Route module loading failed - using fallback' });
+    });
+  });
+}
 
 // Use routes
 app.use('/api/auth', authRoutes);
