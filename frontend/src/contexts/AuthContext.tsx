@@ -29,11 +29,15 @@ const AuthContext = createContext<AuthContextType | undefined>(undefined);
 const getBackendUrl = () => {
   // If we're in the browser
   if (typeof window !== 'undefined') {
+
     const isProduction = window.location.hostname.includes('vercel.app');
     
     if (isProduction) {
+
       return 'https://lead-manager-back-end-app-i5rw.vercel.app';
+      
     }
+
   }
   
   // Default to localhost for development
