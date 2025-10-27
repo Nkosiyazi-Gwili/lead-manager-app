@@ -7,7 +7,7 @@ const app = express();
 
 // CORS Configuration
 const allowedOrigins = [
-  'https://lead-manager-app-psi.vercel.app',
+  'https://lead-manager-front-end-app.vercel.app',
   'http://localhost:3000',
 ];
 
