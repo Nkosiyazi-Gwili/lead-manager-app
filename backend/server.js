@@ -1,11 +1,13 @@
-// api/index.js - COMPLETE WITH ALL ROUTES
+// api/index.js - WITH REAL MONGODB & AUTH
+require('dotenv').config();
 const express = require('express');
+const mongoose = require('mongoose');
+const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
-const JWT_SECRET = process.env.JWT_SECRET || 'your-super-secret-jwt-key-change-in-production';
 
 const app = express();
 
-// Basic CORS middleware
+// CORS middleware
 app.use((req, res, next) => {
   const allowedOrigins = [
     'https://lead-manager-front-end-app.vercel.app',
@@ -31,436 +33,455 @@ app.use(express.json());
 
 // Request logging
 app.use((req, res, next) => {
-  console.log(`📍 ${req.method} ${req.url} - Origin: ${req.headers.origin}`);
+  console.log(`📍 ${req.method} ${req.url}`);
   next();
 });
+
+// MongoDB Connection
+const MONGODB_URI = process.env.MONGODB_URI;
+const JWT_SECRET = process.env.JWT_SECRET || 'your-jwt-secret-key';
+
+if (!MONGODB_URI) {
+  console.error('❌ MONGODB_URI is required');
+}
+
+// User Schema
+const userSchema = new mongoose.Schema({
+  name: {
+    type: String,
+    required: true,
+    trim: true
+  },
+  email: {
+    type: String,
+    required: true,
+    unique: true,
+    lowercase: true,
+    trim: true
+  },
+  password: {
+    type: String,
+    required: true,
+    minlength: 6
+  },
+  role: {
+    type: String,
+    enum: ['admin', 'manager', 'user'],
+    default: 'user'
+  },
+  department: {
+    type: String,
+    default: 'General'
+  },
+  isActive: {
+    type: Boolean,
+    default: true
+  }
+}, {
+  timestamps: true
+});
+
+// Hash password before saving
+userSchema.pre('save', async function(next) {
+  if (!this.isModified('password')) return next();
+  this.password = await bcrypt.hash(this.password, 12);
+  next();
+});
+
+// Compare password method
+userSchema.methods.comparePassword = async function(candidatePassword) {
+  return await bcrypt.compare(candidatePassword, this.password);
+};
+
+const User = mongoose.model('User', userSchema);
+
+// Lead Schema
+const leadSchema = new mongoose.Schema({
+  companyRegisteredName: String,
+  companyTradingName: String,
+  name: {
+    type: String,
+    required: true
+  },
+  surname: {
+    type: String,
+    required: true
+  },
+  emailAddress: {
+    type: String,
+    required: true
+  },
+  mobileNumber: {
+    type: String,
+    required: true
+  },
+  occupation: String,
+  website: String,
+  telephoneNumber: String,
+  whatsappNumber: String,
+  industry: String,
+  numberOfEmployees: String,
+  bbbeeLevel: String,
+  numberOfBranches: String,
+  annualTurnover: String,
+  tradingHours: String,
+  directorsName: String,
+  directorsSurname: String,
+  socialMediaHandles: String,
+  leadStatus: {
+    type: String,
+    enum: ['new', 'contacted', 'qualified', 'converted', 'lost'],
+    default: 'new'
+  },
+  source: {
+    type: String,
+    enum: ['manual', 'csv_import', 'excel_import', 'meta_forms'],
+    default: 'manual'
+  },
+  createdBy: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User'
+  }
+}, {
+  timestamps: true
+});
+
+const Lead = mongoose.model('Lead', leadSchema);
+
+// Connect to MongoDB
+const connectDB = async () => {
+  try {
+    if (mongoose.connection.readyState === 1) {
+      return true;
+    }
+
+    await mongoose.connect(MONGODB_URI, {
+      serverSelectionTimeoutMS: 10000,
+      socketTimeoutMS: 45000,
+    });
+    
+    console.log('✅ MongoDB Connected successfully');
+    
+    // Create default admin user if doesn't exist
+    const adminExists = await User.findOne({ email: 'admin@company.com' });
+    if (!adminExists) {
+      await User.create({
+        name: 'Admin User',
+        email: 'admin@company.com',
+        password: 'admin123', // Will be hashed automatically
+        role: 'admin',
+        department: 'IT'
+      });
+      console.log('✅ Default admin user created');
+    }
+    
+    return true;
+  } catch (error) {
+    console.error('❌ MongoDB connection failed:', error.message);
+    return false;
+  }
+};
+
+// Initialize DB
+connectDB();
+
+// Auth middleware
+const protect = async (req, res, next) => {
+  try {
+    let token;
+
+    if (req.headers.authorization && req.headers.authorization.startsWith('Bearer')) {
+      token = req.headers.authorization.split(' ')[1];
+    }
+
+    if (!token) {
+      return res.status(401).json({
+        success: false,
+        message: 'Not authorized - no token'
+      });
+    }
+
+    const decoded = jwt.verify(token, JWT_SECRET);
+    const user = await User.findById(decoded.userId).select('-password');
+    
+    if (!user) {
+      return res.status(401).json({
+        success: false,
+        message: 'User not found'
+      });
+    }
+
+    if (!user.isActive) {
+      return res.status(401).json({
+        success: false,
+        message: 'User account is deactivated'
+      });
+    }
+
+    req.user = user;
+    next();
+  } catch (error) {
+    console.error('Auth error:', error.message);
+    
+    if (error.name === 'JsonWebTokenError') {
+      return res.status(401).json({
+        success: false,
+        message: 'Invalid token'
+      });
+    }
+    
+    if (error.name === 'TokenExpiredError') {
+      return res.status(401).json({
+        success: false,
+        message: 'Token expired'
+      });
+    }
+    
+    return res.status(401).json({
+      success: false,
+      message: 'Not authorized'
+    });
+  }
+};
 
 // ==================== BASIC ENDPOINTS ====================
 app.get('/', (req, res) => {
   res.json({
     success: true,
-    message: '✅ Backend API is working!',
+    message: '✅ Lead Manager API is working!',
     timestamp: new Date().toISOString(),
     environment: process.env.NODE_ENV || 'production'
   });
 });
 
-// Health check
-app.get('/api/health', (req, res) => {
+app.get('/api/health', async (req, res) => {
+  const dbConnected = await connectDB();
   res.json({
     success: true,
     message: '✅ Health check passed',
-    database: 'Connected',
+    database: dbConnected ? 'connected' : 'disconnected',
     timestamp: new Date().toISOString()
   });
 });
 
-// Test CORS endpoint
 app.get('/api/test-cors', (req, res) => {
   res.json({
     success: true,
     message: '✅ CORS is working!',
-    yourOrigin: req.headers.origin,
-    allowed: true,
-    timestamp: new Date().toISOString()
+    yourOrigin: req.headers.origin
   });
 });
 
 // ==================== AUTH ROUTES ====================
-// In your login route, replace the mock token with a real JWT:
-app.post('/api/auth/login', (req, res) => {
-  console.log('🔐 Login attempt:', req.body.email);
-  
-  // Generate real JWT token
-  const token = jwt.sign(
-    { 
-      userId: '1', 
-      email: req.body.email,
-      role: 'admin'
-    },
-    JWT_SECRET,
-    { expiresIn: '7d' }
-  );
-  
-  res.json({
-    success: true,
-    message: 'Login successful',
-    token: token,
-    user: {
-      id: '1',
-      name: 'Test User',
-      email: req.body.email,
-      role: 'admin',
-      department: 'IT',
-      isActive: true
+app.post('/api/auth/login', async (req, res) => {
+  try {
+    const { email, password } = req.body;
+
+    if (!email || !password) {
+      return res.status(400).json({
+        success: false,
+        message: 'Email and password are required'
+      });
     }
-  });
+
+    // Check MongoDB connection
+    const dbConnected = await connectDB();
+    if (!dbConnected) {
+      return res.status(503).json({
+        success: false,
+        message: 'Database unavailable'
+      });
+    }
+
+    // Find user
+    const user = await User.findOne({ email }).select('+password');
+    if (!user) {
+      return res.status(401).json({
+        success: false,
+        message: 'Invalid credentials'
+      });
+    }
+
+    // Check password
+    const isPasswordValid = await user.comparePassword(password);
+    if (!isPasswordValid) {
+      return res.status(401).json({
+        success: false,
+        message: 'Invalid credentials'
+      });
+    }
+
+    if (!user.isActive) {
+      return res.status(401).json({
+        success: false,
+        message: 'Account deactivated'
+      });
+    }
+
+    // Generate token
+    const token = jwt.sign(
+      { 
+        userId: user._id,
+        email: user.email,
+        role: user.role
+      },
+      JWT_SECRET,
+      { expiresIn: '7d' }
+    );
+
+    res.json({
+      success: true,
+      message: 'Login successful',
+      token: token,
+      user: {
+        id: user._id,
+        name: user.name,
+        email: user.email,
+        role: user.role,
+        department: user.department,
+        isActive: user.isActive
+      }
+    });
+
+  } catch (error) {
+    console.error('Login error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Login failed'
+    });
+  }
 });
 
-// Also update the register route:
-app.post('/api/auth/register', (req, res) => {
-  console.log('📝 Register attempt:', req.body);
-  
-  const token = jwt.sign(
-    { 
-      userId: '2', 
-      email: req.body.email,
-      role: req.body.role || 'user'
-    },
-    JWT_SECRET,
-    { expiresIn: '7d' }
-  );
-  
-  res.json({
-    success: true,
-    message: 'Registration successful',
-    token: token,
-    user: {
-      id: '2',
-      name: req.body.name,
-      email: req.body.email,
-      role: req.body.role || 'user',
-      department: req.body.department || 'General',
-      isActive: true
+app.post('/api/auth/register', async (req, res) => {
+  try {
+    const { name, email, password, role, department } = req.body;
+
+    if (!name || !email || !password) {
+      return res.status(400).json({
+        success: false,
+        message: 'Name, email and password are required'
+      });
     }
-  });
+
+    // Check MongoDB connection
+    const dbConnected = await connectDB();
+    if (!dbConnected) {
+      return res.status(503).json({
+        success: false,
+        message: 'Database unavailable'
+      });
+    }
+
+    // Check if user exists
+    const existingUser = await User.findOne({ email });
+    if (existingUser) {
+      return res.status(400).json({
+        success: false,
+        message: 'User already exists with this email'
+      });
+    }
+
+    // Create user
+    const user = await User.create({
+      name,
+      email,
+      password,
+      role: role || 'user',
+      department: department || 'General'
+    });
+
+    // Generate token
+    const token = jwt.sign(
+      { 
+        userId: user._id,
+        email: user.email,
+        role: user.role
+      },
+      JWT_SECRET,
+      { expiresIn: '7d' }
+    );
+
+    res.status(201).json({
+      success: true,
+      message: 'Registration successful',
+      token: token,
+      user: {
+        id: user._id,
+        name: user.name,
+        email: user.email,
+        role: user.role,
+        department: user.department,
+        isActive: user.isActive
+      }
+    });
+
+  } catch (error) {
+    console.error('Registration error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Registration failed'
+    });
+  }
 });
 
-app.get('/api/auth/me', (req, res) => {
-  const token = req.headers.authorization?.replace('Bearer ', '');
-  
+app.get('/api/auth/me', protect, async (req, res) => {
   res.json({
     success: true,
-    user: {
-      id: '1',
-      name: 'Test User',
-      email: 'test@company.com',
-      role: 'admin',
-      department: 'IT',
-      isActive: true
-    }
+    user: req.user
   });
 });
 
 // ==================== LEADS ROUTES ====================
-app.get('/api/leads', (req, res) => {
-  const mockLeads = [
-    {
-      id: '1',
-      companyTradingName: 'ABC Company',
-      name: 'John',
-      surname: 'Doe',
-      emailAddress: 'john@abccompany.com',
-      mobileNumber: '+27781234567',
-      leadStatus: 'new',
-      source: 'manual',
-      createdAt: new Date().toISOString()
-    },
-    {
-      id: '2',
-      companyTradingName: 'XYZ Corp',
-      name: 'Jane',
-      surname: 'Smith',
-      emailAddress: 'jane@xyzcorp.com',
-      mobileNumber: '+27787654321',
-      leadStatus: 'contacted',
-      source: 'csv_import',
-      createdAt: new Date().toISOString()
-    }
-  ];
-  
-  res.json({
-    success: true,
-    leads: mockLeads,
-    total: mockLeads.length,
-    page: 1,
-    limit: 10
-  });
+app.get('/api/leads', protect, async (req, res) => {
+  try {
+    const leads = await Lead.find().sort({ createdAt: -1 });
+    
+    res.json({
+      success: true,
+      leads: leads,
+      total: leads.length,
+      page: 1,
+      limit: 10
+    });
+
+  } catch (error) {
+    console.error('Get leads error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch leads'
+    });
+  }
 });
 
-app.post('/api/leads', (req, res) => {
-  console.log('➕ Create lead:', req.body);
-  
-  res.json({
-    success: true,
-    message: 'Lead created successfully',
-    lead: {
-      id: '3',
+app.post('/api/leads', protect, async (req, res) => {
+  try {
+    const leadData = {
       ...req.body,
-      leadStatus: 'new',
-      createdAt: new Date().toISOString()
-    }
-  });
-});
+      createdBy: req.user._id
+    };
 
-app.put('/api/leads/:id', (req, res) => {
-  console.log('✏️ Update lead:', req.params.id, req.body);
-  
-  res.json({
-    success: true,
-    message: 'Lead updated successfully',
-    lead: {
-      id: req.params.id,
-      ...req.body,
-      updatedAt: new Date().toISOString()
-    }
-  });
-});
+    const lead = await Lead.create(leadData);
 
-app.delete('/api/leads/:id', (req, res) => {
-  console.log('🗑️ Delete lead:', req.params.id);
-  
-  res.json({
-    success: true,
-    message: 'Lead deleted successfully'
-  });
-});
+    res.status(201).json({
+      success: true,
+      message: 'Lead created successfully',
+      lead: lead
+    });
 
-// ==================== IMPORT ROUTES ====================
-app.post('/api/leads/import/csv', (req, res) => {
-  console.log('📥 CSV import attempt');
-  
-  res.json({
-    success: true,
-    message: 'CSV import completed successfully',
-    leads: [
-      {
-        id: 'csv-1',
-        companyTradingName: 'CSV Import Company',
-        name: 'CSV',
-        surname: 'User',
-        emailAddress: 'csv@example.com',
-        mobileNumber: '+27781112233',
-        leadStatus: 'new',
-        source: 'csv_import'
-      }
-    ],
-    importedCount: 1,
-    errorCount: 0
-  });
-});
-
-app.post('/api/leads/import/excel', (req, res) => {
-  console.log('📥 Excel import attempt');
-  
-  res.json({
-    success: true,
-    message: 'Excel import completed successfully',
-    leads: [
-      {
-        id: 'excel-1',
-        companyTradingName: 'Excel Import Company',
-        name: 'Excel',
-        surname: 'User',
-        emailAddress: 'excel@example.com',
-        mobileNumber: '+27784445566',
-        leadStatus: 'new',
-        source: 'excel_import'
-      }
-    ],
-    importedCount: 1,
-    errorCount: 0
-  });
-});
-
-app.post('/api/leads/import/meta', (req, res) => {
-  console.log('📥 Meta import attempt:', req.body);
-  
-  res.json({
-    success: true,
-    message: 'Meta import completed successfully',
-    leads: [
-      {
-        id: 'meta-1',
-        companyTradingName: 'Meta Lead Company',
-        name: 'Meta',
-        surname: 'User',
-        emailAddress: 'meta@example.com',
-        mobileNumber: '+27789998877',
-        leadStatus: 'new',
-        source: 'meta_forms',
-        metaFormId: req.body.formId,
-        metaBusinessId: req.body.businessId
-      }
-    ],
-    importedCount: 1,
-    errorCount: 0
-  });
-});
-
-// ==================== META ROUTES ====================
-app.post('/api/meta/setup', (req, res) => {
-  console.log('🔧 Meta setup:', req.body.accessToken ? 'Token provided' : 'No token');
-  
-  res.json({
-    success: true,
-    message: 'Meta access configured successfully'
-  });
-});
-
-app.get('/api/meta/businesses', (req, res) => {
-  const mockBusinesses = [
-    {
-      id: 'business_123',
-      name: 'Tech Solutions SA',
-      verification_status: 'verified'
-    },
-    {
-      id: 'business_456',
-      name: 'Marketing Pro',
-      verification_status: 'pending'
-    }
-  ];
-  
-  res.json({
-    success: true,
-    data: mockBusinesses
-  });
-});
-
-app.get('/api/meta/forms', (req, res) => {
-  const pageId = req.query.pageId;
-  
-  const mockForms = [
-    {
-      id: 'form_123',
-      name: 'Contact Form - Website',
-      leads_count: 45,
-      status: 'active'
-    },
-    {
-      id: 'form_456',
-      name: 'Service Inquiry Form',
-      leads_count: 23,
-      status: 'active'
-    }
-  ];
-  
-  res.json({
-    success: true,
-    data: mockForms
-  });
-});
-
-app.post('/api/meta/import-leads', (req, res) => {
-  console.log('📥 Meta leads import:', req.body);
-  
-  res.json({
-    success: true,
-    message: 'Successfully imported leads from Meta forms',
-    leads: [
-      {
-        id: 'meta_import_1',
-        companyTradingName: 'Meta Business Client',
-        name: 'James',
-        surname: 'Wilson',
-        emailAddress: 'james@metabusiness.com',
-        mobileNumber: '+27781234567',
-        leadStatus: 'new',
-        source: 'meta_forms'
-      }
-    ],
-    importedCount: 1
-  });
-});
-
-// ==================== USERS ROUTES ====================
-app.get('/api/users', (req, res) => {
-  const mockUsers = [
-    {
-      id: '1',
-      name: 'Admin User',
-      email: 'admin@company.com',
-      role: 'admin',
-      department: 'IT',
-      isActive: true
-    },
-    {
-      id: '2',
-      name: 'Manager User',
-      email: 'manager@company.com',
-      role: 'manager',
-      department: 'Sales',
-      isActive: true
-    }
-  ];
-  
-  res.json({
-    success: true,
-    users: mockUsers,
-    total: mockUsers.length
-  });
-});
-
-app.get('/api/users/profile', (req, res) => {
-  res.json({
-    success: true,
-    user: {
-      id: '1',
-      name: 'Test User',
-      email: 'test@company.com',
-      role: 'admin',
-      department: 'IT',
-      isActive: true
-    }
-  });
-});
-
-// ==================== REPORTS ROUTES ====================
-app.get('/api/reports/leads', (req, res) => {
-  const mockReport = {
-    totalLeads: 150,
-    newLeads: 45,
-    contactedLeads: 67,
-    convertedLeads: 38,
-    conversionRate: 25.3,
-    leadsBySource: {
-      manual: 50,
-      csv_import: 45,
-      excel_import: 30,
-      meta_forms: 25
-    },
-    leadsByStatus: {
-      new: 45,
-      contacted: 67,
-      qualified: 25,
-      converted: 13
-    }
-  };
-  
-  res.json({
-    success: true,
-    report: mockReport
-  });
+  } catch (error) {
+    console.error('Create lead error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to create lead'
+    });
+  }
 });
 
 // ==================== ERROR HANDLING ====================
 app.use('*', (req, res) => {
   res.status(404).json({
     success: false,
-    message: `Route not found: ${req.method} ${req.originalUrl}`,
-    availableEndpoints: [
-      'GET    /',
-      'GET    /api/health',
-      'GET    /api/test-cors',
-      'POST   /api/auth/login',
-      'POST   /api/auth/register',
-      'GET    /api/auth/me',
-      'GET    /api/leads',
-      'POST   /api/leads',
-      'PUT    /api/leads/:id',
-      'DELETE /api/leads/:id',
-      'POST   /api/leads/import/csv',
-      'POST   /api/leads/import/excel',
-      'POST   /api/leads/import/meta',
-      'POST   /api/meta/setup',
-      'GET    /api/meta/businesses',
-      'GET    /api/meta/forms',
-      'POST   /api/meta/import-leads',
-      'GET    /api/users',
-      'GET    /api/users/profile',
-      'GET    /api/reports/leads'
-    ]
+    message: `Route not found: ${req.method} ${req.originalUrl}`
   });
 });
 
@@ -472,5 +493,4 @@ app.use((error, req, res, next) => {
   });
 });
 
-// Export for Vercel
 module.exports = app;
