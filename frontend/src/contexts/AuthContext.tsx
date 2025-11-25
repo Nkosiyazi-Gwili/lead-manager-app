@@ -14,9 +14,18 @@ interface User {
   isActive: boolean;
 }
 
+interface RegisterData {
+  name: string;
+  email: string;
+  password: string;
+  role?: string;
+  department?: string;
+}
+
 interface AuthContextType {
   user: User | null;
   login: (email: string, password: string) => Promise<{ success: boolean; message?: string; user?: User }>;
+  register: (userData: RegisterData) => Promise<{ success: boolean; message?: string; user?: User }>;
   logout: () => void;
   loading: boolean;
   error: string | null;
@@ -27,20 +36,12 @@ const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 // Determine backend URL based on environment
 const getBackendUrl = () => {
-  // If we're in the browser
   if (typeof window !== 'undefined') {
-
     const isProduction = window.location.hostname.includes('vercel.app');
-    
     if (isProduction) {
-
-      return 'https://lead-manager-back-end-app-i5rw.vercel.app';
-      
+      return 'https://lead-manager-back-end-app-i5rw.vercel.app'; 
     }
-
   }
-  
-  // Default to localhost for development
   return 'http://localhost:5000';
 };
 
@@ -49,7 +50,7 @@ const BACKEND_URL = getBackendUrl();
 // Configure axios
 const api = axios.create({
   baseURL: BACKEND_URL,
-  timeout: 30000, // Increased timeout for production
+  timeout: 30000,
   headers: {
     'Content-Type': 'application/json',
   },
@@ -59,7 +60,6 @@ const api = axios.create({
 const handleApiError = (error: any): string => {
   console.error('API Error:', error);
 
-  // Network errors
   if (error.code === 'ERR_NETWORK' || error.message.includes('Network Error')) {
     return 'Cannot connect to the server. Please check your internet connection and try again.';
   }
@@ -68,17 +68,14 @@ const handleApiError = (error: any): string => {
     return 'Server is unavailable. Please try again later.';
   }
 
-  // CORS specific errors
   if (error.code === 'ERR_CANCELED' || error.message.includes('CORS')) {
     return 'Connection blocked by browser security. Please check if the server is running and accessible.';
   }
 
-  // Timeout errors
   if (error.code === 'ECONNABORTED') {
     return 'Request timeout. Please try again.';
   }
 
-  // HTTP status code errors
   if (error.response) {
     const status = error.response.status;
     const data = error.response.data;
@@ -116,7 +113,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     console.log('🔄 Initializing AuthProvider...');
     console.log('🌐 Backend URL:', BACKEND_URL);
     console.log('📍 Current hostname:', typeof window !== 'undefined' ? window.location.hostname : 'server');
-
     checkAuth();
   }, []);
 
@@ -171,6 +167,37 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   };
 
+  const register = async (userData: RegisterData): Promise<{ success: boolean; message?: string; user?: User }> => {
+    try {
+      setLoading(true);
+      clearError();
+
+      console.log('📝 Attempting registration...');
+      
+      const response = await api.post('/api/auth/register', userData);
+      
+      if (response.data.success) {
+        const { token, user: userData } = response.data;
+        
+        localStorage.setItem('token', token);
+        setUser(userData);
+        
+        return { success: true, user: userData };
+      } else {
+        throw new Error(response.data.message || 'Registration failed');
+      }
+    } catch (error: any) {
+      console.error('❌ Registration error:', error);
+      
+      const errorMessage = handleApiError(error);
+      setError(errorMessage);
+      
+      return { success: false, message: errorMessage };
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const logout = () => {
     console.log('🚪 Logging out...');
     localStorage.removeItem('token');
@@ -179,9 +206,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     router.push('/login');
   };
 
+  // SINGLE value object - removed duplicate declaration
   const value: AuthContextType = {
     user,
     login,
+    register,
     logout,
     loading,
     error,

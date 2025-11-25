@@ -9,20 +9,58 @@ import ProtectedRoute from '@/components/ProtectedRoute';
 interface ImportResult {
   message: string;
   leads: any[];
+  importedCount?: number;
+  errorCount?: number;
   errors?: string[];
 }
 
 // Helper functions for API calls
 const getApiBaseUrl = () => {
-  return process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000';
+  if (typeof window !== 'undefined') {
+    const isProduction = window.location.hostname.includes('vercel.app');
+    return isProduction 
+      ? 'https://lead-manager-back-end-app-i5rw.vercel.app'
+      : 'http://localhost:5000';
+  }
+  return 'http://localhost:5000';
 };
 
 const getAuthHeaders = () => {
   if (typeof window !== 'undefined') {
     const token = localStorage.getItem('token');
-    return token ? { Authorization: `Bearer ${token}` } : {};
+    return token ? { 
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json'
+    } : {};
   }
   return {};
+};
+
+// Enhanced error handler for API calls
+const handleApiError = (error: any): string => {
+  console.error('API Error:', error);
+  
+  if (error.code === 'ERR_NETWORK' || error.message.includes('Network Error')) {
+    return 'Cannot connect to server. Please check if backend is running.';
+  }
+  
+  if (error.response?.status === 404) {
+    return 'API endpoint not found. The backend service might be unavailable.';
+  }
+  
+  if (error.response?.status === 500) {
+    return 'Server error. Please try again later.';
+  }
+  
+  if (error.response?.status === 401) {
+    return 'Authentication failed. Please login again.';
+  }
+  
+  if (error.response?.status === 413) {
+    return 'File too large. Please select a file smaller than 10MB.';
+  }
+  
+  return error.response?.data?.message || 'An unexpected error occurred';
 };
 
 export default function Import() {
@@ -38,44 +76,74 @@ export default function Import() {
   const [metaForms, setMetaForms] = useState<any[]>([]);
   const [selectedForm, setSelectedForm] = useState('');
 
+  // Test backend connection
+  const testBackendConnection = async (): Promise<boolean> => {
+    try {
+      const response = await axios.get(`${getApiBaseUrl()}/api/health`, {
+        timeout: 5000,
+        headers: getAuthHeaders()
+      });
+      return response.data.success;
+    } catch (error) {
+      console.error('Backend connection test failed:', error);
+      return false;
+    }
+  };
+
   const importCSVMutation = useMutation({
-    mutationFn: (formData: FormData) => 
-      axios.post(`${getApiBaseUrl()}/api/leads/import/csv`, formData, {
+    mutationFn: async (formData: FormData) => {
+      const isConnected = await testBackendConnection();
+      if (!isConnected) {
+        throw new Error('Backend server is not available. Please ensure the backend is running.');
+      }
+      
+      return axios.post(`${getApiBaseUrl()}/api/leads/import/csv`, formData, {
         headers: { 
-          'Content-Type': 'multipart/form-data',
-          ...getAuthHeaders()
-        }
-      }),
+          ...getAuthHeaders(),
+          'Content-Type': 'multipart/form-data'
+        },
+        timeout: 60000
+      });
+    },
     onSuccess: (response) => {
       setImportResult(response.data);
       queryClient.invalidateQueries({ queryKey: ['leads'] });
     },
     onError: (error: any) => {
+      const errorMessage = handleApiError(error);
       setImportResult({
         message: 'Import failed',
         leads: [],
-        errors: [error.response?.data?.message || 'Unknown error']
+        errors: [errorMessage]
       });
     }
   });
 
   const importExcelMutation = useMutation({
-    mutationFn: (formData: FormData) => 
-      axios.post(`${getApiBaseUrl()}/api/leads/import/excel`, formData, {
+    mutationFn: async (formData: FormData) => {
+      const isConnected = await testBackendConnection();
+      if (!isConnected) {
+        throw new Error('Backend server is not available. Please ensure the backend is running.');
+      }
+      
+      return axios.post(`${getApiBaseUrl()}/api/leads/import/excel`, formData, {
         headers: { 
-          'Content-Type': 'multipart/form-data',
-          ...getAuthHeaders()
-        }
-      }),
+          ...getAuthHeaders(),
+          'Content-Type': 'multipart/form-data'
+        },
+        timeout: 60000
+      });
+    },
     onSuccess: (response) => {
       setImportResult(response.data);
       queryClient.invalidateQueries({ queryKey: ['leads'] });
     },
     onError: (error: any) => {
+      const errorMessage = handleApiError(error);
       setImportResult({
         message: 'Import failed',
         leads: [],
-        errors: [error.response?.data?.message || 'Unknown error']
+        errors: [errorMessage]
       });
     }
   });
@@ -93,6 +161,17 @@ export default function Import() {
         message: 'No file selected',
         leads: [],
         errors: ['Please select a file to import']
+      });
+      setIsLoading(false);
+      return;
+    }
+
+    // Validate file size
+    if (file.size > 10 * 1024 * 1024) {
+      setImportResult({
+        message: 'File too large',
+        leads: [],
+        errors: ['File size must be less than 10MB']
       });
       setIsLoading(false);
       return;
@@ -119,34 +198,51 @@ export default function Import() {
 
     setIsLoading(true);
     try {
+      const isConnected = await testBackendConnection();
+      if (!isConnected) {
+        throw new Error('Backend server is not available. Please ensure the backend is running.');
+      }
+
       const response = await axios.post(`${getApiBaseUrl()}/api/meta/setup`, 
         { accessToken: metaToken },
-        { headers: getAuthHeaders() }
+        { 
+          headers: getAuthHeaders(),
+          timeout: 15000
+        }
       );
+      
       alert('Meta access configured successfully!');
       
       // Fetch business accounts
-      const businessesResponse = await axios.get(`${getApiBaseUrl()}/api/meta/businesses`, {
-        headers: getAuthHeaders()
-      });
-      setMetaBusinesses(businessesResponse.data.data);
+      try {
+        const businessesResponse = await axios.get(`${getApiBaseUrl()}/api/meta/businesses`, {
+          headers: getAuthHeaders(),
+          timeout: 15000
+        });
+        setMetaBusinesses(businessesResponse.data.data || []);
+      } catch (businessError) {
+        console.warn('Could not fetch business accounts:', businessError);
+        // Continue without businesses
+      }
     } catch (error: any) {
-      alert(error.response?.data?.message || 'Failed to setup Meta access');
+      const errorMessage = handleApiError(error);
+      alert(`Failed to setup Meta access: ${errorMessage}`);
     } finally {
       setIsLoading(false);
     }
   };
 
-  // Fetch forms when business is selected
   const fetchForms = async (businessId: string) => {
     try {
       const response = await axios.get(`${getApiBaseUrl()}/api/meta/forms?pageId=${businessId}`, {
-        headers: getAuthHeaders()
+        headers: getAuthHeaders(),
+        timeout: 15000
       });
-      setMetaForms(response.data.data);
+      setMetaForms(response.data.data || []);
     } catch (error: any) {
       console.error('Failed to fetch forms:', error);
-      alert('Failed to fetch forms for this business');
+      const errorMessage = handleApiError(error);
+      alert(`Failed to fetch forms: ${errorMessage}`);
     }
   };
 
@@ -155,23 +251,82 @@ export default function Import() {
     setImportResult(null);
     
     try {
-      const response = await axios.post(`${getApiBaseUrl()}/api/leads/import/meta`, {
-        formId: selectedForm,
-        businessId: selectedBusiness
-      }, {
-        headers: getAuthHeaders()
-      });
+      const isConnected = await testBackendConnection();
+      if (!isConnected) {
+        throw new Error('Backend server is not available.');
+      }
+
+      // Try both possible endpoints
+      let response;
+      try {
+        response = await axios.post(`${getApiBaseUrl()}/api/leads/import/meta`, {
+          formId: selectedForm,
+          businessId: selectedBusiness
+        }, {
+          headers: getAuthHeaders(),
+          timeout: 30000
+        });
+      } catch (error) {
+        // Fallback to meta endpoint
+        response = await axios.post(`${getApiBaseUrl()}/api/meta/import-leads`, {
+          formId: selectedForm,
+          businessId: selectedBusiness
+        }, {
+          headers: getAuthHeaders(),
+          timeout: 30000
+        });
+      }
+      
       setImportResult(response.data);
       queryClient.invalidateQueries({ queryKey: ['leads'] });
     } catch (error: any) {
+      const errorMessage = handleApiError(error);
       setImportResult({
         message: 'Meta import failed',
         leads: [],
-        errors: [error.response?.data?.message || 'Failed to import from Meta']
+        errors: [errorMessage]
       });
     } finally {
       setIsLoading(false);
     }
+  };
+
+  // Demo data for testing when backend is down
+  const handleDemoImport = async () => {
+    setIsLoading(true);
+    setImportResult(null);
+    
+    // Simulate API call delay
+    setTimeout(() => {
+      setImportResult({
+        message: 'Demo Import Completed',
+        leads: [
+          {
+            id: 'demo-1',
+            companyTradingName: 'Demo Company 1',
+            name: 'John',
+            surname: 'Doe',
+            emailAddress: 'john@demo.com',
+            mobileNumber: '+27781234567',
+            leadStatus: 'new',
+            source: 'demo_import'
+          },
+          {
+            id: 'demo-2', 
+            companyTradingName: 'Demo Company 2',
+            name: 'Jane',
+            surname: 'Smith',
+            emailAddress: 'jane@demo.com',
+            mobileNumber: '+27787654321',
+            leadStatus: 'new',
+            source: 'demo_import'
+          }
+        ],
+        importedCount: 2
+      });
+      queryClient.invalidateQueries({ queryKey: ['leads'] });
+      setIsLoading(false);
+    }, 2000);
   };
 
   const downloadTemplate = (type: 'csv' | 'excel') => {
@@ -232,8 +387,6 @@ export default function Import() {
       link.click();
       URL.revokeObjectURL(url);
     } else {
-      // For Excel, we'd need a library like xlsx to create proper Excel file
-      // For now, we'll just download as CSV with .xlsx extension
       const csvContent = templateData.map(row => row.join(',')).join('\n');
       const blob = new Blob([csvContent], { type: 'application/vnd.ms-excel' });
       const url = URL.createObjectURL(blob);
@@ -299,7 +452,7 @@ export default function Import() {
                     <h3 className="font-semibold text-blue-800 mb-2">Import Instructions</h3>
                     <ul className="text-sm text-blue-700 space-y-1">
                       <li>• Download the template file to ensure proper formatting</li>
-                      <li>• Required fields: Name, Email, Mobile Number</li>
+                      <li>• Required fields: Name, Surname, Email, Mobile Number</li>
                       <li>• File size limit: 10MB</li>
                       <li>• Supported formats: {activeTab === 'csv' ? 'CSV' : 'XLSX, XLS'}</li>
                     </ul>
@@ -436,7 +589,7 @@ export default function Import() {
                       <button
                         onClick={handleMetaImport}
                         disabled={isLoading || !selectedForm}
-                        className="bg-purple-600 text-white px-4 py-2 rounded hover:bg-purple-700 disabled:opacity-50"
+                        className="bg-purple-600 text-white px-4 py-2 rounded hover:bg-purple-700 disabled:opacity-50 mr-2"
                       >
                         {isLoading ? 'Importing...' : 'Import from Meta'}
                       </button>
@@ -450,7 +603,7 @@ export default function Import() {
                           No Meta Business accounts configured. You can test the import with demo data.
                         </p>
                         <button
-                          onClick={handleMetaImport}
+                          onClick={handleDemoImport}
                           disabled={isLoading}
                           className="bg-yellow-600 text-white px-4 py-2 rounded hover:bg-yellow-700 disabled:opacity-50"
                         >
@@ -465,23 +618,26 @@ export default function Import() {
               {/* Import Results */}
               {importResult && (
                 <div className={`mt-6 p-4 rounded-lg ${
-                  importResult.errors ? 'bg-red-50 border border-red-200' : 'bg-green-50 border border-green-200'
+                  importResult.errors && importResult.errors.length > 0 ? 'bg-red-50 border border-red-200' : 'bg-green-50 border border-green-200'
                 }`}>
                   <h3 className={`font-semibold mb-2 ${
-                    importResult.errors ? 'text-red-800' : 'text-green-800'
+                    importResult.errors && importResult.errors.length > 0 ? 'text-red-800' : 'text-green-800'
                   }`}>
                     {importResult.message}
                   </h3>
                   
-                  {importResult.leads && importResult.leads.length > 0 && (
+                  {importResult.importedCount !== undefined && (
                     <div className="mb-3">
                       <p className="text-sm text-gray-700">
-                        Successfully imported {importResult.leads.length} leads
+                        Successfully imported {importResult.importedCount} leads
+                        {importResult.errorCount && importResult.errorCount > 0 && 
+                          `, ${importResult.errorCount} errors`
+                        }
                       </p>
                     </div>
                   )}
 
-                  {importResult.errors && (
+                  {importResult.errors && importResult.errors.length > 0 && (
                     <div>
                       <h4 className="font-medium text-red-700 mb-2">Errors:</h4>
                       <ul className="text-sm text-red-600 space-y-1">
@@ -502,6 +658,7 @@ export default function Import() {
                               <th className="px-4 py-2 text-left">Company</th>
                               <th className="px-4 py-2 text-left">Contact</th>
                               <th className="px-4 py-2 text-left">Email</th>
+                              <th className="px-4 py-2 text-left">Phone</th>
                               <th className="px-4 py-2 text-left">Status</th>
                             </tr>
                           </thead>
@@ -513,6 +670,7 @@ export default function Import() {
                                 </td>
                                 <td className="px-4 py-2">{lead.name} {lead.surname}</td>
                                 <td className="px-4 py-2">{lead.emailAddress}</td>
+                                <td className="px-4 py-2">{lead.mobileNumber}</td>
                                 <td className="px-4 py-2">
                                   <span className="px-2 py-1 text-xs rounded-full bg-green-100 text-green-800">
                                     {lead.leadStatus || 'new'}
@@ -550,18 +708,6 @@ export default function Import() {
                 </thead>
                 <tbody>
                   <tr className="border-t">
-                    <td className="px-4 py-2 font-medium">company_registered_name</td>
-                    <td className="px-4 py-2">Legal company name</td>
-                    <td className="px-4 py-2">No</td>
-                    <td className="px-4 py-2">ABC Company (Pty) Ltd</td>
-                  </tr>
-                  <tr className="border-t bg-gray-50">
-                    <td className="px-4 py-2 font-medium">company_trading_name</td>
-                    <td className="px-4 py-2">Trading name</td>
-                    <td className="px-4 py-2">No</td>
-                    <td className="px-4 py-2">ABC Company</td>
-                  </tr>
-                  <tr className="border-t">
                     <td className="px-4 py-2 font-medium">name</td>
                     <td className="px-4 py-2">Contact first name</td>
                     <td className="px-4 py-2">Yes</td>
@@ -584,6 +730,18 @@ export default function Import() {
                     <td className="px-4 py-2">Mobile phone</td>
                     <td className="px-4 py-2">Yes</td>
                     <td className="px-4 py-2">+27771234567</td>
+                  </tr>
+                  <tr className="border-t">
+                    <td className="px-4 py-2 font-medium">company_trading_name</td>
+                    <td className="px-4 py-2">Trading name</td>
+                    <td className="px-4 py-2">No</td>
+                    <td className="px-4 py-2">ABC Company</td>
+                  </tr>
+                  <tr className="border-t bg-gray-50">
+                    <td className="px-4 py-2 font-medium">occupation</td>
+                    <td className="px-4 py-2">Job title</td>
+                    <td className="px-4 py-2">No</td>
+                    <td className="px-4 py-2">Manager</td>
                   </tr>
                 </tbody>
               </table>
