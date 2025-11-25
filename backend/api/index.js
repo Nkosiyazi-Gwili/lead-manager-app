@@ -1,4 +1,4 @@
-// api/index.js - USING ACTUAL ROUTE FILES
+// api/index.js - FIXED NO DUPLICATE ROUTES
 const express = require('express');
 
 const app = express();
