@@ -1,5 +1,7 @@
 // api/index.js - COMPLETE WITH ALL ROUTES
 const express = require('express');
+const jwt = require('jsonwebtoken');
+const JWT_SECRET = process.env.JWT_SECRET || 'your-super-secret-jwt-key-change-in-production';
 
 const app = express();
 
@@ -65,13 +67,25 @@ app.get('/api/test-cors', (req, res) => {
 });
 
 // ==================== AUTH ROUTES ====================
+// In your login route, replace the mock token with a real JWT:
 app.post('/api/auth/login', (req, res) => {
   console.log('🔐 Login attempt:', req.body.email);
+  
+  // Generate real JWT token
+  const token = jwt.sign(
+    { 
+      userId: '1', 
+      email: req.body.email,
+      role: 'admin'
+    },
+    JWT_SECRET,
+    { expiresIn: '7d' }
+  );
   
   res.json({
     success: true,
     message: 'Login successful',
-    token: 'mock-jwt-token-' + Date.now(),
+    token: token,
     user: {
       id: '1',
       name: 'Test User',
@@ -83,13 +97,24 @@ app.post('/api/auth/login', (req, res) => {
   });
 });
 
+// Also update the register route:
 app.post('/api/auth/register', (req, res) => {
   console.log('📝 Register attempt:', req.body);
+  
+  const token = jwt.sign(
+    { 
+      userId: '2', 
+      email: req.body.email,
+      role: req.body.role || 'user'
+    },
+    JWT_SECRET,
+    { expiresIn: '7d' }
+  );
   
   res.json({
     success: true,
     message: 'Registration successful',
-    token: 'mock-jwt-token-' + Date.now(),
+    token: token,
     user: {
       id: '2',
       name: req.body.name,
