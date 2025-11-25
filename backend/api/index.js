@@ -1,5 +1,8 @@
-// api/index.js - MINIMAL WORKING VERSION WITH LOGIN
+// api/index.js - WITH MONGODB AUTHENTICATION
 const express = require('express');
+const mongoose = require('mongoose');
+const bcrypt = require('bcryptjs');
+const jwt = require('jsonwebtoken');
 
 const app = express();
 
@@ -24,21 +27,56 @@ app.use((req, res, next) => {
   next();
 });
 
-// Root endpoint - SIMPLE AND GUARANTEED TO WORK
+// MongoDB connection
+const MONGODB_URI = process.env.MONGODB_URI || 'mongodb+srv://gwilinkosiyazi1:v34FQ0k4xFWyPec3@cluster0.1ccukxh.mongodb.net/leadmanager?retryWrites=true&w=majority';
+
+const connectDB = async () => {
+  try {
+    if (mongoose.connection.readyState === 1) {
+      console.log('✅ MongoDB already connected');
+      return true;
+    }
+
+    console.log('🔄 Connecting to MongoDB...');
+    await mongoose.connect(MONGODB_URI, {
+      serverSelectionTimeoutMS: 15000,
+      socketTimeoutMS: 45000,
+    });
+    console.log('✅ MongoDB Connected successfully');
+    return true;
+  } catch (error) {
+    console.error('❌ MongoDB connection failed:', error.message);
+    return false;
+  }
+};
+
+// Connect to MongoDB on startup
+connectDB();
+
+// Root endpoint
 app.get('/', (req, res) => {
   res.json({
     success: true,
     message: '✅ API is working!',
-    timestamp: new Date().toISOString()
+    timestamp: new Date().toISOString(),
+    mongodb: {
+      connected: mongoose.connection.readyState === 1,
+      state: mongoose.connection.readyState
+    }
   });
 });
 
-// Health check
-app.get('/api/health', (req, res) => {
+// Health check with DB connection
+app.get('/api/health', async (req, res) => {
+  const dbConnected = await connectDB();
   res.json({
     success: true,
     message: '✅ Health check passed',
-    timestamp: new Date().toISOString()
+    timestamp: new Date().toISOString(),
+    mongodb: {
+      connected: dbConnected,
+      state: mongoose.connection.readyState
+    }
   });
 });
 
@@ -51,8 +89,8 @@ app.get('/api/test-cors', (req, res) => {
   });
 });
 
-// LOGIN ROUTE - ADDED HERE
-app.post('/api/auth/login', (req, res) => {
+// REAL LOGIN ROUTE WITH MONGODB
+app.post('/api/auth/login', async (req, res) => {
   try {
     const { email, password } = req.body;
 
@@ -66,25 +104,85 @@ app.post('/api/auth/login', (req, res) => {
       });
     }
 
-    // Mock login - ALWAYS SUCCESS FOR TESTING
-    // In production, you'd validate against a database
-    const mockUser = {
-      id: '12345',
-      name: 'Test User',
-      email: email,
-      role: 'user'
+    // Ensure DB connection
+    const dbConnected = await connectDB();
+    if (!dbConnected) {
+      return res.status(503).json({
+        success: false,
+        message: 'Database connection unavailable'
+      });
+    }
+
+    // Import User model (simple version)
+    const userSchema = new mongoose.Schema({
+      name: String,
+      email: String,
+      password: String,
+      role: String,
+      department: String,
+      isActive: { type: Boolean, default: true }
+    });
+
+    // Remove password when converting to JSON
+    userSchema.methods.toJSON = function() {
+      const user = this.toObject();
+      delete user.password;
+      return user;
     };
 
-    // Mock token
-    const mockToken = 'mock_jwt_token_' + Date.now();
+    const User = mongoose.models.User || mongoose.model('User', userSchema);
 
-    console.log('✅ Login successful for:', email);
+    // Find user by email
+    const user = await User.findOne({ email }).select('+password');
+    
+    if (!user) {
+      console.log('❌ User not found:', email);
+      return res.status(401).json({
+        success: false,
+        message: 'Invalid credentials'
+      });
+    }
+
+    // Check if user is active
+    if (user.isActive === false) {
+      return res.status(401).json({
+        success: false,
+        message: 'Account is deactivated'
+      });
+    }
+
+    // Check password
+    const isPasswordValid = await bcrypt.compare(password, user.password);
+    
+    if (!isPasswordValid) {
+      console.log('❌ Invalid password for:', email);
+      return res.status(401).json({
+        success: false,
+        message: 'Invalid credentials'
+      });
+    }
+
+    // Create JWT token
+    const token = jwt.sign(
+      { 
+        userId: user._id,
+        email: user.email,
+        role: user.role
+      },
+      process.env.JWT_SECRET || 'your-super-secret-jwt-key-change-in-production',
+      { expiresIn: '30d' }
+    );
+
+    // Return user data (without password)
+    const userResponse = user.toJSON();
+
+    console.log('✅ Login successful for:', email, 'Role:', user.role);
 
     res.json({
       success: true,
       message: 'Login successful',
-      token: mockToken,
-      user: mockUser
+      token: token,
+      user: userResponse
     });
 
   } catch (error) {
@@ -96,10 +194,10 @@ app.post('/api/auth/login', (req, res) => {
   }
 });
 
-// REGISTER ROUTE - ADDED FOR COMPLETENESS
-app.post('/api/auth/register', (req, res) => {
+// REAL REGISTER ROUTE
+app.post('/api/auth/register', async (req, res) => {
   try {
-    const { name, email, password } = req.body;
+    const { name, email, password, role = 'user' } = req.body;
 
     console.log('📝 Register attempt:', { name, email, password: password ? '***' : 'missing' });
 
@@ -110,22 +208,60 @@ app.post('/api/auth/register', (req, res) => {
       });
     }
 
-    const mockUser = {
-      id: '67890',
-      name: name,
-      email: email,
-      role: 'user'
-    };
+    // Ensure DB connection
+    const dbConnected = await connectDB();
+    if (!dbConnected) {
+      return res.status(503).json({
+        success: false,
+        message: 'Database connection unavailable'
+      });
+    }
 
-    const mockToken = 'mock_jwt_token_' + Date.now();
+    const User = mongoose.model('User');
+
+    // Check if user already exists
+    const existingUser = await User.findOne({ email });
+    if (existingUser) {
+      return res.status(409).json({
+        success: false,
+        message: 'User already exists with this email'
+      });
+    }
+
+    // Hash password
+    const saltRounds = 12;
+    const hashedPassword = await bcrypt.hash(password, saltRounds);
+
+    // Create user
+    const user = await User.create({
+      name,
+      email,
+      password: hashedPassword,
+      role,
+      isActive: true
+    });
+
+    // Create JWT token
+    const token = jwt.sign(
+      { 
+        userId: user._id,
+        email: user.email,
+        role: user.role
+      },
+      process.env.JWT_SECRET || 'your-super-secret-jwt-key-change-in-production',
+      { expiresIn: '30d' }
+    );
+
+    // Return user data (without password)
+    const userResponse = user.toJSON();
 
     console.log('✅ Registration successful for:', email);
 
     res.status(201).json({
       success: true,
       message: 'User registered successfully',
-      token: mockToken,
-      user: mockUser
+      token: token,
+      user: userResponse
     });
 
   } catch (error) {
@@ -137,8 +273,8 @@ app.post('/api/auth/register', (req, res) => {
   }
 });
 
-// GET CURRENT USER
-app.get('/api/auth/me', (req, res) => {
+// Auth middleware
+const authMiddleware = async (req, res, next) => {
   try {
     const token = req.headers.authorization?.replace('Bearer ', '');
     
@@ -149,26 +285,72 @@ app.get('/api/auth/me', (req, res) => {
       });
     }
 
-    // Mock user data
-    const mockUser = {
-      id: '12345',
-      name: 'Test User',
-      email: 'test@example.com',
-      role: 'user'
-    };
+    const decoded = jwt.verify(
+      token, 
+      process.env.JWT_SECRET || 'your-super-secret-jwt-key-change-in-production'
+    );
 
-    res.json({
-      success: true,
-      user: mockUser
-    });
+    // Ensure DB connection
+    const dbConnected = await connectDB();
+    if (!dbConnected) {
+      return res.status(503).json({
+        success: false,
+        message: 'Database connection unavailable'
+      });
+    }
+
+    const User = mongoose.model('User');
+    const user = await User.findById(decoded.userId);
+
+    if (!user) {
+      return res.status(401).json({
+        success: false,
+        message: 'User not found'
+      });
+    }
+
+    if (user.isActive === false) {
+      return res.status(401).json({
+        success: false,
+        message: 'Account is deactivated'
+      });
+    }
+
+    req.user = user;
+    next();
 
   } catch (error) {
-    console.error('❌ Auth check error:', error);
-    res.status(401).json({
+    console.error('❌ Auth middleware error:', error);
+    return res.status(401).json({
       success: false,
       message: 'Invalid token'
     });
   }
+};
+
+// GET CURRENT USER (PROTECTED)
+app.get('/api/auth/me', authMiddleware, async (req, res) => {
+  try {
+    res.json({
+      success: true,
+      user: req.user.toJSON()
+    });
+  } catch (error) {
+    console.error('❌ Get me error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error'
+    });
+  }
+});
+
+// TEST PROTECTED ROUTE
+app.get('/api/auth/protected-test', authMiddleware, (req, res) => {
+  res.json({
+    success: true,
+    message: '✅ Protected route accessed successfully!',
+    user: req.user.toJSON()
+  });
 });
 
 // 404 handler
