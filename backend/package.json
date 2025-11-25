@@ -6,6 +6,7 @@
   "scripts": {
     "start": "node server.js",
     "dev": "nodemon server.js",
+    "vercel-dev": "node api/index.js",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "dependencies": {
@@ -30,6 +31,6 @@
     "meta",
     "import"
   ],
-  "author": "Your Name",
+  "author": "Nkosiyazi Gwili",
   "license": "MIT"
 }
