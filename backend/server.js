@@ -5,33 +5,61 @@ const cors = require('cors');
 
 const app = express();
 
-// CORS Configuration
+// CORS Configuration - SIMPLIFIED AND FIXED
 const allowedOrigins = [
   'https://lead-manager-front-end-app.vercel.app',
   'http://localhost:3000',
+  'https://lead-manager-front-end-app-git-main-nkosiyazi-gwilis-projects.vercel.app',
+  'https://lead-manager-front-end-app-*.vercel.app' // Wildcard for preview deployments
 ];
 
+// Use simpler CORS configuration
 app.use(cors({
   origin: function (origin, callback) {
+    // Allow requests with no origin (like mobile apps or curl requests)
     if (!origin) return callback(null, true);
-    if (allowedOrigins.indexOf(origin) === -1) {
-      const msg = 'The CORS policy for this site does not allow access from the specified Origin.';
-      return callback(new Error(msg), false);
+    
+    // Check if origin is in allowed list or matches wildcard pattern
+    if (allowedOrigins.some(allowed => {
+      if (allowed.includes('*')) {
+        const pattern = allowed.replace('*', '.*');
+        return new RegExp(pattern).test(origin);
+      }
+      return allowed === origin;
+    })) {
+      return callback(null, true);
+    } else {
+      console.log('🚫 CORS blocked origin:', origin);
+      return callback(new Error(`CORS policy: Origin ${origin} not allowed`), false);
     }
-    return callback(null, true);
   },
   credentials: true,
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With']
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
+  allowedHeaders: [
+    'Content-Type', 
+    'Authorization', 
+    'X-Requested-With',
+    'Accept',
+    'Origin',
+    'Access-Control-Request-Method',
+    'Access-Control-Request-Headers'
+  ],
+  exposedHeaders: ['Content-Length', 'Authorization'],
+  preflightContinue: false,
+  optionsSuccessStatus: 204
 }));
 
-app.use(express.json());
+// Handle OPTIONS requests explicitly
+app.options('*', cors());
 
 // Debug middleware
 app.use((req, res, next) => {
   console.log('📍 Request:', req.method, req.url, 'Origin:', req.headers.origin);
+  console.log('📋 Headers:', req.headers);
   next();
 });
+
+app.use(express.json());
 
 // MongoDB connection
 const MONGODB_URI = process.env.MONGODB_URI;
@@ -77,7 +105,6 @@ const connectDB = async () => {
       serverSelectionTimeoutMS: 30000,
       socketTimeoutMS: 45000,
       maxPoolSize: 10,
-      // Remove deprecated options
     });
     
     console.log('✅ MongoDB Connected successfully');
@@ -159,7 +186,12 @@ app.get('/', (req, res) => {
     message: 'Smart Register Backend API',
     version: '1.0.0',
     timestamp: new Date().toISOString(),
-    environment: process.env.NODE_ENV
+    environment: process.env.NODE_ENV,
+    cors: {
+      allowedOrigins: allowedOrigins,
+      yourOrigin: req.headers.origin,
+      allowed: allowedOrigins.includes(req.headers.origin)
+    }
   });
 });
 
@@ -172,6 +204,17 @@ app.get('/api/health', async (req, res) => {
       message: 'Server is running',
       timestamp: new Date().toISOString(),
       environment: process.env.NODE_ENV,
+      cors: {
+        allowedOrigins: allowedOrigins,
+        yourOrigin: req.headers.origin,
+        allowed: allowedOrigins.some(allowed => {
+          if (allowed.includes('*')) {
+            const pattern = allowed.replace('*', '.*');
+            return new RegExp(pattern).test(req.headers.origin);
+          }
+          return allowed === req.headers.origin;
+        })
+      },
       mongodb: {
         connected: dbConnected,
         state: mongoose.connection.readyState,
@@ -203,19 +246,41 @@ function getConnectionStateText(state) {
   }
 }
 
-// Test endpoint
+// Enhanced CORS test endpoint
 app.get('/api/test-cors', (req, res) => {
   res.json({
     success: true,
     message: 'CORS is working!',
-    yourOrigin: req.headers.origin,
-    allowedOrigins: allowedOrigins
+    cors: {
+      yourOrigin: req.headers.origin,
+      allowedOrigins: allowedOrigins,
+      allowed: allowedOrigins.some(allowed => {
+        if (allowed.includes('*')) {
+          const pattern = allowed.replace('*', '.*');
+          return new RegExp(pattern).test(req.headers.origin);
+        }
+        return allowed === req.headers.origin;
+      }),
+      headers: req.headers
+    }
   });
 });
 
 // Error handling middleware
 app.use((err, req, res, next) => {
   console.error('Error:', err);
+  
+  // Handle CORS errors specifically
+  if (err.message.includes('CORS')) {
+    return res.status(403).json({
+      success: false,
+      message: 'CORS Error: Access blocked',
+      error: err.message,
+      yourOrigin: req.headers.origin,
+      allowedOrigins: allowedOrigins
+    });
+  }
+  
   res.status(500).json({
     success: false,
     message: 'Internal Server Error',
@@ -227,7 +292,9 @@ app.use((err, req, res, next) => {
 app.use('*', (req, res) => {
   res.status(404).json({
     success: false,
-    message: 'Route not found'
+    message: 'Route not found',
+    requestedUrl: req.originalUrl,
+    method: req.method
   });
 });
 
@@ -263,5 +330,7 @@ if (process.env.NODE_ENV !== 'production' && require.main === module) {
   app.listen(PORT, '0.0.0.0', () => {
     console.log(`🚀 Server running on port ${PORT}`);
     console.log(`🔗 Health check: http://localhost:${PORT}/api/health`);
+    console.log(`🌐 CORS Test: http://localhost:${PORT}/api/test-cors`);
+    console.log(`✅ Allowed Origins:`, allowedOrigins);
   });
 }
