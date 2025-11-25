@@ -1,3 +1,4 @@
+// api/index.js - USE THIS INSTEAD OF server.js
 require('dotenv').config();
 const express = require('express');
 const mongoose = require('mongoose');
@@ -77,7 +78,6 @@ const connectDB = async () => {
       serverSelectionTimeoutMS: 30000,
       socketTimeoutMS: 45000,
       maxPoolSize: 10,
-      // Remove deprecated options
     });
     
     console.log('✅ MongoDB Connected successfully');
@@ -125,7 +125,7 @@ connectDB().then(connected => {
   }
 });
 
-// Import routes with error handling
+// Import routes with error handling - CORRECT PATHS
 let authRoutes, leadsRoutes, usersRoutes, reportsRoutes, metaRoutes, importRoutes;
 
 try {
@@ -231,31 +231,8 @@ app.use('*', (req, res) => {
   });
 });
 
-// Serverless function handler with connection management
-module.exports = async (req, res) => {
-  try {
-    // Ensure DB connection is active for each request
-    const dbConnected = await connectDB();
-    
-    if (!dbConnected) {
-      return res.status(503).json({
-        success: false,
-        message: 'Database connection unavailable. Please try again.',
-        mongodbState: mongoose.connection.readyState
-      });
-    }
-    
-    // Pass request to Express app
-    return app(req, res);
-  } catch (error) {
-    console.error('Serverless function error:', error);
-    return res.status(500).json({
-      success: false,
-      message: 'Server initialization failed',
-      error: error.message
-    });
-  }
-};
+// Export for Vercel
+module.exports = app;
 
 // Only listen locally in development
 if (process.env.NODE_ENV !== 'production' && require.main === module) {
