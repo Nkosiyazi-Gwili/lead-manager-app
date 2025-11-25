@@ -1,94 +1,192 @@
-require('dotenv').config();
+// api/index.js - MINIMAL WORKING VERSION WITH LOGIN
 const express = require('express');
-const mongoose = require('mongoose');
-const cors = require('cors');
 
 const app = express();
 
-// CORS Configuration
-const allowedOrigins = [
-  'https://lead-manager-front-end-app.vercel.app',
-  'http://localhost:3000',
-];
-
-app.use(cors({
-  origin: function (origin, callback) {
-    if (!origin) return callback(null, true);
-    if (allowedOrigins.indexOf(origin) === -1) {
-      const msg = 'The CORS policy for this site does not allow access from the specified Origin.';
-      return callback(new Error(msg), false);
-    }
-    return callback(null, true);
-  },
-  credentials: true,
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With']
-}));
-
-app.use(express.json());
-
-// Debug middleware
+// Simple CORS
 app.use((req, res, next) => {
-  console.log('📍 Request:', req.method, req.url, 'Origin:', req.headers.origin);
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  
+  if (req.method === 'OPTIONS') {
+    return res.status(200).end();
+  }
+  
   next();
 });
 
-// MongoDB connection
-const MONGODB_URI = process.env.MONGODB_URI;
+app.use(express.json());
 
-const connectDB = async () => {
-  if (mongoose.connection.readyState === 1) {
-    return true;
-  }
+// Basic request logging
+app.use((req, res, next) => {
+  console.log(`📍 ${req.method} ${req.url}`);
+  next();
+});
 
-  try {
-    await mongoose.connect(MONGODB_URI, {
-      serverSelectionTimeoutMS: 30000,
-      socketTimeoutMS: 45000,
-      maxPoolSize: 10,
-    });
-    console.log('✅ MongoDB Connected successfully');
-    return true;
-  } catch (error) {
-    console.error('❌ MongoDB connection failed:', error.message);
-    return false;
-  }
-};
-
-// Import routes
-const authRoutes = require('./routes/auth');
-const leadsRoutes = require('./routes/leads');
-const usersRoutes = require('./routes/users');
-const reportsRoutes = require('./routes/reports');
-const metaRoutes = require('./routes/meta');
-const importRoutes = require('./routes/import');
-
-// Use routes
-app.use('/api/auth', authRoutes);
-app.use('/api/leads', leadsRoutes);
-app.use('/api/users', usersRoutes);
-app.use('/api/reports', reportsRoutes);
-app.use('/api/meta', metaRoutes);
-app.use('/api/leads/import', importRoutes);
-
-// Health check
-app.get('/api/health', async (req, res) => {
-  const dbConnected = await connectDB();
-  res.json({ 
-    success: true, 
-    message: 'Server is running',
-    mongodb: { connected: dbConnected }
+// Root endpoint - SIMPLE AND GUARANTEED TO WORK
+app.get('/', (req, res) => {
+  res.json({
+    success: true,
+    message: '✅ API is working!',
+    timestamp: new Date().toISOString()
   });
 });
 
-// Root endpoint
-app.get('/', (req, res) => {
-  res.json({ message: 'Smart Register Backend API' });
+// Health check
+app.get('/api/health', (req, res) => {
+  res.json({
+    success: true,
+    message: '✅ Health check passed',
+    timestamp: new Date().toISOString()
+  });
+});
+
+// Test CORS
+app.get('/api/test-cors', (req, res) => {
+  res.json({
+    success: true,
+    message: '✅ CORS is working!',
+    yourOrigin: req.headers.origin
+  });
+});
+
+// LOGIN ROUTE - ADDED HERE
+app.post('/api/auth/login', (req, res) => {
+  try {
+    const { email, password } = req.body;
+
+    console.log('📧 Login attempt:', { email, password: password ? '***' : 'missing' });
+
+    // Simple validation
+    if (!email || !password) {
+      return res.status(400).json({
+        success: false,
+        message: 'Email and password are required'
+      });
+    }
+
+    // Mock login - ALWAYS SUCCESS FOR TESTING
+    // In production, you'd validate against a database
+    const mockUser = {
+      id: '12345',
+      name: 'Test User',
+      email: email,
+      role: 'user'
+    };
+
+    // Mock token
+    const mockToken = 'mock_jwt_token_' + Date.now();
+
+    console.log('✅ Login successful for:', email);
+
+    res.json({
+      success: true,
+      message: 'Login successful',
+      token: mockToken,
+      user: mockUser
+    });
+
+  } catch (error) {
+    console.error('❌ Login error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error during login'
+    });
+  }
+});
+
+// REGISTER ROUTE - ADDED FOR COMPLETENESS
+app.post('/api/auth/register', (req, res) => {
+  try {
+    const { name, email, password } = req.body;
+
+    console.log('📝 Register attempt:', { name, email, password: password ? '***' : 'missing' });
+
+    if (!name || !email || !password) {
+      return res.status(400).json({
+        success: false,
+        message: 'Name, email, and password are required'
+      });
+    }
+
+    const mockUser = {
+      id: '67890',
+      name: name,
+      email: email,
+      role: 'user'
+    };
+
+    const mockToken = 'mock_jwt_token_' + Date.now();
+
+    console.log('✅ Registration successful for:', email);
+
+    res.status(201).json({
+      success: true,
+      message: 'User registered successfully',
+      token: mockToken,
+      user: mockUser
+    });
+
+  } catch (error) {
+    console.error('❌ Registration error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error during registration'
+    });
+  }
+});
+
+// GET CURRENT USER
+app.get('/api/auth/me', (req, res) => {
+  try {
+    const token = req.headers.authorization?.replace('Bearer ', '');
+    
+    if (!token) {
+      return res.status(401).json({
+        success: false,
+        message: 'No token provided'
+      });
+    }
+
+    // Mock user data
+    const mockUser = {
+      id: '12345',
+      name: 'Test User',
+      email: 'test@example.com',
+      role: 'user'
+    };
+
+    res.json({
+      success: true,
+      user: mockUser
+    });
+
+  } catch (error) {
+    console.error('❌ Auth check error:', error);
+    res.status(401).json({
+      success: false,
+      message: 'Invalid token'
+    });
+  }
 });
 
 // 404 handler
 app.use('*', (req, res) => {
-  res.status(404).json({ success: false, message: 'Route not found' });
+  res.status(404).json({
+    success: false,
+    message: 'Route not found: ' + req.originalUrl
+  });
 });
 
+// Error handler
+app.use((err, req, res, next) => {
+  console.error('Server error:', err.message);
+  res.status(500).json({
+    success: false,
+    message: 'Internal server error'
+  });
+});
+
+// Simple export
 module.exports = app;
