@@ -1,318 +1,224 @@
-// server.js - SELF-CONTAINED WORKING VERSION
 require('dotenv').config();
 const express = require('express');
 const mongoose = require('mongoose');
-const bcrypt = require('bcryptjs');
-const jwt = require('jsonwebtoken');
+const cors = require('cors');
 
 const app = express();
 
-// MANUAL CORS - GUARANTEED TO WORK
+// CORS Configuration
 const allowedOrigins = [
   'https://lead-manager-front-end-app.vercel.app',
-  'https://lead-manager-front-end-app-git-main-gwilinkosiyazis-projects.vercel.app',
-  'https://lead-manager-front-end-app-gwilinkosiyazis-projects.vercel.app',
-  'http://localhost:3000'
+  'http://localhost:3000',
 ];
 
-app.use((req, res, next) => {
-  const origin = req.headers.origin;
-  
-  if (allowedOrigins.includes(origin)) {
-    res.setHeader('Access-Control-Allow-Origin', origin);
-  }
-  
-  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS, PATCH');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With, Accept');
-  res.setHeader('Access-Control-Allow-Credentials', 'true');
-  res.setHeader('Access-Control-Max-Age', '86400');
-  
-  // Handle preflight requests
-  if (req.method === 'OPTIONS') {
-    console.log('✅ Preflight request handled for:', origin);
-    return res.status(200).end();
-  }
-  
-  console.log(`📍 ${req.method} ${req.path} from: ${origin}`);
-  next();
-});
+app.use(cors({
+  origin: function (origin, callback) {
+    if (!origin) return callback(null, true);
+    if (allowedOrigins.indexOf(origin) === -1) {
+      const msg = 'The CORS policy for this site does not allow access from the specified Origin.';
+      return callback(new Error(msg), false);
+    }
+    return callback(null, true);
+  },
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With']
+}));
 
 app.use(express.json());
 
+// Debug middleware
+app.use((req, res, next) => {
+  console.log('📍 Request:', req.method, req.url, 'Origin:', req.headers.origin);
+  next();
+});
+
 // MongoDB connection
-const MONGODB_URI = process.env.MONGODB_URI || 'mongodb+srv://gwilinkosiyazi1:v34FQ0k4xFWyPec3@cluster0.1ccukxh.mongodb.net/leadmanager?retryWrites=true&w=majority';
+const MONGODB_URI = process.env.MONGODB_URI;
+
+if (!MONGODB_URI) {
+  console.error('❌ MONGODB_URI is not defined in environment variables');
+}
+
+// Global connection state
+let isConnecting = false;
+let connectionRetries = 0;
+const MAX_RETRIES = 3;
 
 const connectDB = async () => {
+  // If already connected, return
+  if (mongoose.connection.readyState === 1) {
+    console.log('✅ MongoDB already connected');
+    return true;
+  }
+
+  // If already connecting, wait
+  if (isConnecting) {
+    console.log('🔄 MongoDB connection in progress...');
+    return new Promise((resolve) => {
+      const checkConnection = () => {
+        if (mongoose.connection.readyState === 1) {
+          resolve(true);
+        } else {
+          setTimeout(checkConnection, 100);
+        }
+      };
+      checkConnection();
+    });
+  }
+
+  isConnecting = true;
+
   try {
-    if (mongoose.connection.readyState === 1) {
-      return true;
-    }
+    console.log('🔄 Attempting MongoDB connection...');
     
-    console.log('🔄 Connecting to MongoDB...');
+    // Updated connection options for Mongoose 6+
     await mongoose.connect(MONGODB_URI, {
       serverSelectionTimeoutMS: 30000,
       socketTimeoutMS: 45000,
       maxPoolSize: 10,
     });
-    console.log('✅ MongoDB connected');
+    
+    console.log('✅ MongoDB Connected successfully');
+    connectionRetries = 0;
+    isConnecting = false;
     return true;
+    
   } catch (error) {
     console.error('❌ MongoDB connection failed:', error.message);
+    connectionRetries++;
+    isConnecting = false;
+    
+    if (connectionRetries < MAX_RETRIES) {
+      console.log(`🔄 Retrying connection (${connectionRetries}/${MAX_RETRIES})...`);
+      setTimeout(connectDB, 2000);
+    }
+    
     return false;
   }
 };
 
-// Connect to DB
-connectDB();
-
-// Simple User Model
-const userSchema = new mongoose.Schema({
-  name: String,
-  email: String,
-  password: String,
-  role: String,
-  department: String,
-  isActive: { type: Boolean, default: true }
-}, {
-  timestamps: true
+// Connection event handlers
+mongoose.connection.on('connected', () => {
+  console.log('✅ MongoDB connected');
 });
 
-userSchema.methods.toJSON = function() {
-  const user = this.toObject();
-  delete user.password;
-  return user;
-};
+mongoose.connection.on('error', (err) => {
+  console.error('❌ MongoDB connection error:', err);
+});
 
-const User = mongoose.models.User || mongoose.model('User', userSchema);
+mongoose.connection.on('disconnected', () => {
+  console.log('❌ MongoDB disconnected');
+});
 
-// ===== AUTH ROUTES - INCLUDED DIRECTLY =====
+mongoose.connection.on('reconnected', () => {
+  console.log('✅ MongoDB reconnected');
+});
 
-// LOGIN ROUTE
-app.post('/api/auth/login', async (req, res) => {
-  try {
-    console.log('📧 Login attempt received');
-    
-    const { email, password } = req.body;
-
-    // Validation
-    if (!email || !password) {
-      return res.status(400).json({
-        success: false,
-        message: 'Email and password are required'
-      });
-    }
-
-    // Ensure DB connection
-    const dbConnected = await connectDB();
-    if (!dbConnected) {
-      return res.status(503).json({
-        success: false,
-        message: 'Database connection unavailable'
-      });
-    }
-
-    // Find user
-    const user = await User.findOne({ email }).select('+password');
-    
-    if (!user) {
-      console.log('❌ User not found:', email);
-      return res.status(401).json({
-        success: false,
-        message: 'Invalid credentials'
-      });
-    }
-
-    // Check password
-    const isPasswordValid = await bcrypt.compare(password, user.password);
-    
-    if (!isPasswordValid) {
-      console.log('❌ Invalid password for:', email);
-      return res.status(401).json({
-        success: false,
-        message: 'Invalid credentials'
-      });
-    }
-
-    // Create token
-    const token = jwt.sign(
-      { 
-        userId: user._id,
-        email: user.email,
-        role: user.role
-      },
-      process.env.JWT_SECRET || 'fallback-secret-key',
-      { expiresIn: '30d' }
-    );
-
-    const userResponse = user.toJSON();
-
-    console.log('✅ Login successful for:', email);
-
-    res.json({
-      success: true,
-      message: 'Login successful',
-      token: token,
-      user: userResponse
-    });
-
-  } catch (error) {
-    console.error('❌ Login error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Server error during login',
-      error: error.message
-    });
+// Initial connection
+connectDB().then(connected => {
+  if (connected) {
+    console.log('🚀 MongoDB connection established');
+  } else {
+    console.log('❌ MongoDB connection failed');
   }
 });
 
-// REGISTER ROUTE
-app.post('/api/auth/register', async (req, res) => {
-  try {
-    const { name, email, password, role = 'user' } = req.body;
+// Import routes with error handling
+let authRoutes, leadsRoutes, usersRoutes, reportsRoutes, metaRoutes, importRoutes;
 
-    if (!name || !email || !password) {
-      return res.status(400).json({
-        success: false,
-        message: 'Name, email, and password are required'
-      });
-    }
+try {
+  authRoutes = require('./routes/auth');
+  leadsRoutes = require('./routes/leads');
+  usersRoutes = require('./routes/users');
+  reportsRoutes = require('./routes/reports');
+  metaRoutes = require('./routes/meta');
+  importRoutes = require('./routes/import');
+  console.log('✅ All routes loaded successfully');
+} catch (error) {
+  console.error('❌ Error loading routes:', error.message);
+  // Create simple fallback routes
+  const router = express.Router();
+  router.get('/health', (req, res) => res.json({ status: 'fallback' }));
+  authRoutes = leadsRoutes = usersRoutes = reportsRoutes = metaRoutes = importRoutes = router;
+}
 
-    const dbConnected = await connectDB();
-    if (!dbConnected) {
-      return res.status(503).json({
-        success: false,
-        message: 'Database connection unavailable'
-      });
-    }
-
-    // Check if user exists
-    const existingUser = await User.findOne({ email });
-    if (existingUser) {
-      return res.status(409).json({
-        success: false,
-        message: 'User already exists'
-      });
-    }
-
-    // Hash password
-    const hashedPassword = await bcrypt.hash(password, 12);
-
-    // Create user
-    const user = await User.create({
-      name,
-      email,
-      password: hashedPassword,
-      role
-    });
-
-    // Create token
-    const token = jwt.sign(
-      { 
-        userId: user._id,
-        email: user.email,
-        role: user.role
-      },
-      process.env.JWT_SECRET || 'fallback-secret-key',
-      { expiresIn: '30d' }
-    );
-
-    const userResponse = user.toJSON();
-
-    res.status(201).json({
-      success: true,
-      message: 'User registered successfully',
-      token: token,
-      user: userResponse
-    });
-
-  } catch (error) {
-    console.error('❌ Registration error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Server error during registration'
-    });
-  }
-});
-
-// GET CURRENT USER
-app.get('/api/auth/me', async (req, res) => {
-  try {
-    const token = req.headers.authorization?.replace('Bearer ', '');
-    
-    if (!token) {
-      return res.status(401).json({
-        success: false,
-        message: 'No token provided'
-      });
-    }
-
-    const decoded = jwt.verify(
-      token, 
-      process.env.JWT_SECRET || 'fallback-secret-key'
-    );
-
-    const dbConnected = await connectDB();
-    if (!dbConnected) {
-      return res.status(503).json({
-        success: false,
-        message: 'Database connection unavailable'
-      });
-    }
-
-    const user = await User.findById(decoded.userId);
-    if (!user) {
-      return res.status(401).json({
-        success: false,
-        message: 'User not found'
-      });
-    }
-
-    res.json({
-      success: true,
-      user: user.toJSON()
-    });
-
-  } catch (error) {
-    console.error('❌ Auth check error:', error);
-    res.status(401).json({
-      success: false,
-      message: 'Invalid token'
-    });
-  }
-});
-
-// ===== BASIC ROUTES =====
+// Use routes
+app.use('/api/auth', authRoutes);
+app.use('/api/leads', leadsRoutes);
+app.use('/api/users', usersRoutes);
+app.use('/api/reports', reportsRoutes);
+app.use('/api/meta', metaRoutes);
+app.use('/api/leads/import', importRoutes);
 
 // Root endpoint
 app.get('/', (req, res) => {
   res.json({
     success: true,
-    message: '🚀 Smart Register API is running!',
+    message: 'Smart Register Backend API',
+    version: '1.0.0',
     timestamp: new Date().toISOString(),
-    mongodb: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected',
-    yourOrigin: req.headers.origin
+    environment: process.env.NODE_ENV
   });
 });
 
-// Health check
+// Health check with DB connection test
 app.get('/api/health', async (req, res) => {
-  const dbConnected = await connectDB();
-  res.json({
-    success: true,
-    message: '✅ Server is healthy',
-    timestamp: new Date().toISOString(),
-    mongodb: dbConnected ? 'connected' : 'disconnected',
-    yourOrigin: req.headers.origin
-  });
+  try {
+    const dbConnected = await connectDB();
+    res.json({ 
+      success: true, 
+      message: 'Server is running',
+      timestamp: new Date().toISOString(),
+      environment: process.env.NODE_ENV,
+      mongodb: {
+        connected: dbConnected,
+        state: mongoose.connection.readyState,
+        stateText: getConnectionStateText(mongoose.connection.readyState)
+      }
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: 'Server error',
+      error: error.message,
+      mongodb: {
+        connected: false,
+        state: mongoose.connection.readyState,
+        stateText: getConnectionStateText(mongoose.connection.readyState)
+      }
+    });
+  }
 });
 
-// CORS test
+// Helper function for connection state
+function getConnectionStateText(state) {
+  switch (state) {
+    case 0: return 'disconnected';
+    case 1: return 'connected';
+    case 2: return 'connecting';
+    case 3: return 'disconnecting';
+    default: return 'unknown';
+  }
+}
+
+// Test endpoint
 app.get('/api/test-cors', (req, res) => {
   res.json({
     success: true,
-    message: '✅ CORS is working!',
+    message: 'CORS is working!',
     yourOrigin: req.headers.origin,
     allowedOrigins: allowedOrigins
+  });
+});
+
+// Error handling middleware
+app.use((err, req, res, next) => {
+  console.error('Error:', err);
+  res.status(500).json({
+    success: false,
+    message: 'Internal Server Error',
+    error: process.env.NODE_ENV === 'production' ? {} : err.message
   });
 });
 
@@ -320,20 +226,11 @@ app.get('/api/test-cors', (req, res) => {
 app.use('*', (req, res) => {
   res.status(404).json({
     success: false,
-    message: 'Route not found: ' + req.originalUrl
+    message: 'Route not found'
   });
 });
 
-// Error handler
-app.use((err, req, res, next) => {
-  console.error('Server error:', err);
-  res.status(500).json({
-    success: false,
-    message: 'Internal server error'
-  });
-});
-
-// ✅ SIMPLE EXPORT FOR VERCEL
+// ✅ FIXED: Simple export for Vercel
 module.exports = app;
 
 // Only listen locally in development
@@ -342,8 +239,5 @@ if (process.env.NODE_ENV !== 'production' && require.main === module) {
   app.listen(PORT, '0.0.0.0', () => {
     console.log(`🚀 Server running on port ${PORT}`);
     console.log(`🔗 Health check: http://localhost:${PORT}/api/health`);
-    console.log(`🔗 CORS test: http://localhost:${PORT}/api/test-cors`);
-    console.log(`🔗 Login: http://localhost:${PORT}/api/auth/login`);
-    console.log(`🌐 Allowed origins:`, allowedOrigins);
   });
 }
