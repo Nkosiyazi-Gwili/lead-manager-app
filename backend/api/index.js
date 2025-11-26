@@ -1,7 +1,10 @@
-// api/index.js - FIXED PATHS
+// api/index.js - UPDATED WITH COMPLETE AUTH
 const express = require('express');
+const mongoose = require('mongoose');
 const app = express();
-const path = require('path');
+
+// Fix mongoose version issue
+mongoose.set('strictQuery', true);
 
 app.use(express.json());
 
@@ -20,52 +23,98 @@ app.use((req, res, next) => {
   next();
 });
 
-// Test endpoints
+// MongoDB connection
+const connectDB = async () => {
+  try {
+    if (mongoose.connection.readyState === 1) {
+      return true;
+    }
+    
+    const MONGODB_URI = process.env.MONGODB_URI;
+    if (!MONGODB_URI) {
+      console.log('⚠️  MONGODB_URI not set, using mock data');
+      return false;
+    }
+    
+    await mongoose.connect(MONGODB_URI, {
+      serverSelectionTimeoutMS: 5000,
+      socketTimeoutMS: 10000,
+    });
+    console.log('✅ MongoDB connected');
+    return true;
+  } catch (error) {
+    console.log('⚠️  MongoDB connection failed:', error.message);
+    return false;
+  }
+};
+
+// Connect to DB in background
+connectDB();
+
+// Basic endpoints
 app.get('/', (req, res) => {
   res.json({
     success: true,
-    message: 'Lead Manager Backend API ✅',
+    message: 'Lead Manager Backend API 🚀',
     version: '1.0.0',
-    status: 'DEPLOYED',
+    status: 'LIVE WITH COMPLETE AUTH',
     timestamp: new Date().toISOString()
   });
 });
 
-app.get('/api/health', (req, res) => {
-  res.json({
-    success: true,
-    message: '🚀 API is fully operational on Vercel',
-    timestamp: new Date().toISOString()
-  });
+app.get('/api/health', async (req, res) => {
+  try {
+    const dbStatus = await connectDB();
+    res.json({
+      success: true,
+      message: '✅ API is fully operational',
+      timestamp: new Date().toISOString(),
+      mongodb: {
+        connected: dbStatus,
+        state: mongoose.connection.readyState,
+      }
+    });
+  } catch (error) {
+    res.json({
+      success: true,
+      message: '✅ API is running (DB connection issue)',
+      timestamp: new Date().toISOString(),
+      mongodb: { connected: false }
+    });
+  }
 });
 
-// Load routes with proper paths
-console.log('🔧 Loading routes...');
+// Load the complete auth routes
+try {
+  const authRoutes = require('../routes/auth-complete');
+  app.use('/api/auth', authRoutes);
+  console.log('✅ Complete auth routes loaded successfully');
+} catch (error) {
+  console.error('❌ Auth routes failed:', error.message);
+  app.use('/api/auth', (req, res) => {
+    res.json({ 
+      message: 'Auth endpoint - fallback mode',
+      error: error.message 
+    });
+  });
+}
 
-const routePaths = [
-  { name: 'auth', path: '../routes/auth' },
-  { name: 'leads', path: '../routes/leads' },
-  { name: 'users', path: '../routes/users' },
-  { name: 'reports', path: '../routes/reports' },
-  { name: 'meta', path: '../routes/meta' },
-  { name: 'import', path: '../routes/import' }
+// Load other routes with fallbacks
+const otherRoutes = [
+  'leads', 'users', 'reports', 'meta', 'import'
 ];
 
-routePaths.forEach(route => {
+otherRoutes.forEach(routeName => {
   try {
-    console.log(`Loading ${route.name}...`);
-    // Try multiple path options
-    const routeModule = require(route.path);
-    app.use(`/api/${route.name}`, routeModule);
-    console.log(`✅ ${route.name} route loaded`);
+    const routeModule = require(`../routes/${routeName}`);
+    app.use(`/api/${routeName}`, routeModule);
+    console.log(`✅ ${routeName} routes loaded`);
   } catch (error) {
-    console.error(`❌ ${route.name} failed:`, error.message);
-    // Fallback route
-    app.use(`/api/${route.name}`, (req, res) => {
+    console.error(`❌ ${routeName} routes failed:`, error.message);
+    app.use(`/api/${routeName}`, (req, res) => {
       res.json({ 
-        message: `${route.name} endpoint - working but route file not loaded`,
-        fallback: true,
-        path: req.path
+        message: `${routeName} endpoint - working but route file not loaded`,
+        fallback: true
       });
     });
   }
