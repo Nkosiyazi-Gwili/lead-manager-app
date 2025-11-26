@@ -1,8 +1,12 @@
-// server.js - COMPLETE LEAD MANAGER API
+// server.js - COMPLETE SELF-CONTAINED VERSION FOR VERCEL
 const express = require('express');
 const mongoose = require('mongoose');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
+const multer = require('multer');
+const csv = require('csv-parser');
+const XLSX = require('xlsx');
+const axios = require('axios');
 
 const app = express();
 
@@ -40,7 +44,7 @@ app.use((req, res, next) => {
   next();
 });
 
-// MongoDB connection - WITH FALLBACK URI
+// MongoDB connection
 const MONGODB_URI = process.env.MONGODB_URI || 'mongodb+srv://gwilinkosiyazi1:v34FQ0k4xFWyPec3@cluster0.1ccukxh.mongodb.net/leadmanager?retryWrites=true&w=majority';
 
 console.log('🔗 MongoDB URI:', MONGODB_URI ? '***' + MONGODB_URI.slice(-20) : 'Not found');
@@ -211,7 +215,40 @@ const adminMiddleware = (req, res, next) => {
   next();
 };
 
-// ===== AUTH ROUTES =====
+// Manager middleware
+const managerMiddleware = (req, res, next) => {
+  const managerRoles = ['admin', 'sales_manager', 'marketing_manager'];
+  if (!managerRoles.includes(req.user.role)) {
+    return res.status(403).json({
+      success: false,
+      message: 'Access denied. Manager privileges required.'
+    });
+  }
+  next();
+};
+
+// Configure multer for file uploads
+const storage = multer.memoryStorage();
+const upload = multer({ 
+  storage: storage,
+  limits: {
+    fileSize: 10 * 1024 * 1024 // 10MB limit
+  },
+  fileFilter: (req, file, cb) => {
+    const allowedTypes = [
+      'text/csv',
+      'application/vnd.ms-excel',
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+    ];
+    if (allowedTypes.includes(file.mimetype)) {
+      cb(null, true);
+    } else {
+      cb(new Error('Invalid file type. Only CSV and Excel files are allowed.'));
+    }
+  }
+});
+
+// ===== BASIC ROUTES =====
 
 // Root endpoint
 app.get('/', (req, res) => {
@@ -248,6 +285,8 @@ app.get('/api/test-cors', (req, res) => {
     allowedOrigins: allowedOrigins
   });
 });
+
+// ===== AUTH ROUTES =====
 
 // DEBUG: Check all users in database
 app.get('/api/auth/debug-users', async (req, res) => {
@@ -717,6 +756,211 @@ app.post('/api/leads/:id/notes', authMiddleware, async (req, res) => {
   }
 });
 
+// ===== IMPORT ROUTES =====
+
+// IMPORT LEADS FROM FILE
+app.post('/api/leads/import', authMiddleware, upload.single('file'), async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({
+        success: false,
+        message: 'No file uploaded'
+      });
+    }
+
+    const leads = [];
+    const errors = [];
+
+    if (req.file.mimetype === 'text/csv') {
+      // Process CSV
+      const csvData = req.file.buffer.toString();
+      const rows = csvData.split('\n').filter(row => row.trim());
+      
+      // Skip header row and process data
+      for (let i = 1; i < rows.length; i++) {
+        try {
+          const columns = rows[i].split(',').map(col => col.trim());
+          
+          const leadData = {
+            leadSource: 'csv_import',
+            leadStatus: 'new',
+            companyTradingName: columns[0] || '',
+            name: columns[1] || '',
+            surname: columns[2] || '',
+            emailAddress: columns[3] || '',
+            mobileNumber: columns[4] || '',
+            industry: columns[5] || '',
+            createdBy: req.user._id
+          };
+
+          leads.push(leadData);
+        } catch (error) {
+          errors.push(`Row ${i + 1}: ${error.message}`);
+        }
+      }
+    } else {
+      // Process Excel
+      const workbook = XLSX.read(req.file.buffer, { type: 'buffer' });
+      const sheetName = workbook.SheetNames[0];
+      const worksheet = workbook.Sheets[sheetName];
+      const jsonData = XLSX.utils.sheet_to_json(worksheet);
+
+      jsonData.forEach((row, index) => {
+        try {
+          const leadData = {
+            leadSource: 'csv_import',
+            leadStatus: 'new',
+            companyTradingName: row['Company Name'] || row['company'] || '',
+            name: row['First Name'] || row['name'] || '',
+            surname: row['Last Name'] || row['surname'] || '',
+            emailAddress: row['Email'] || row['email'] || '',
+            mobileNumber: row['Phone'] || row['Mobile'] || row['phone'] || '',
+            industry: row['Industry'] || row['industry'] || '',
+            createdBy: req.user._id
+          };
+
+          leads.push(leadData);
+        } catch (error) {
+          errors.push(`Row ${index + 2}: ${error.message}`);
+        }
+      });
+    }
+
+    // Insert leads into database
+    if (leads.length > 0) {
+      const insertedLeads = await Lead.insertMany(leads, { ordered: false });
+      
+      console.log(`✅ Imported ${insertedLeads.length} leads from file`);
+
+      res.json({
+        success: true,
+        message: `Successfully imported ${insertedLeads.length} leads`,
+        imported: insertedLeads.length,
+        errors: errors.length > 0 ? errors : undefined
+      });
+    } else {
+      res.status(400).json({
+        success: false,
+        message: 'No valid leads found in file',
+        errors
+      });
+    }
+
+  } catch (error) {
+    console.error('Import leads error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error importing leads',
+      error: error.message
+    });
+  }
+});
+
+// ===== META ROUTES =====
+
+// META BUSINESS WEBHOOK
+app.post('/api/meta/webhook', async (req, res) => {
+  try {
+    console.log('📱 Meta webhook received:', req.body);
+    
+    // Verify webhook signature (you should implement this)
+    const { entry } = req.body;
+    
+    if (!entry || !Array.isArray(entry)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid webhook data'
+      });
+    }
+
+    const dbConnected = await connectDB();
+    if (!dbConnected) {
+      return res.status(503).json({
+        success: false,
+        message: 'Database connection unavailable'
+      });
+    }
+
+    let processedCount = 0;
+
+    for (const item of entry) {
+      try {
+        if (item.changes && Array.isArray(item.changes)) {
+          for (const change of item.changes) {
+            if (change.field === 'leadgen' && change.value) {
+              const leadData = change.value;
+              
+              const metaLead = {
+                leadSource: 'meta_business',
+                leadStatus: 'new',
+                name: leadData.first_name || '',
+                surname: leadData.last_name || '',
+                emailAddress: leadData.email || '',
+                mobileNumber: leadData.phone_number || '',
+                metaAdId: leadData.ad_id || '',
+                metaFormId: leadData.form_id || '',
+                metaCampaignId: leadData.campaign_id || '',
+                metaData: leadData,
+                createdBy: null // System generated
+              };
+
+              await Lead.create(metaLead);
+              processedCount++;
+              console.log('✅ Meta lead processed:', leadData.id);
+            }
+          }
+        }
+      } catch (leadError) {
+        console.error('Error processing meta lead:', leadError);
+      }
+    }
+
+    res.json({
+      success: true,
+      message: `Processed ${processedCount} meta leads`,
+      processed: processedCount
+    });
+
+  } catch (error) {
+    console.error('Meta webhook error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error processing meta webhook'
+    });
+  }
+});
+
+// GET META LEAD STATS
+app.get('/api/meta/stats', authMiddleware, async (req, res) => {
+  try {
+    const stats = await Lead.aggregate([
+      { $match: { leadSource: 'meta_business' } },
+      {
+        $group: {
+          _id: '$leadStatus',
+          count: { $sum: 1 }
+        }
+      }
+    ]);
+
+    const totalMetaLeads = await Lead.countDocuments({ leadSource: 'meta_business' });
+
+    res.json({
+      success: true,
+      data: {
+        total: totalMetaLeads,
+        byStatus: stats
+      }
+    });
+  } catch (error) {
+    console.error('Meta stats error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error fetching meta statistics'
+    });
+  }
+});
+
 // ===== REPORT ROUTES =====
 
 // GET LEAD STATISTICS
@@ -808,6 +1052,8 @@ if (require.main === module) {
     console.log(`📍 Local: http://localhost:${PORT}`);
     console.log(`🔗 Health: http://localhost:${PORT}/api/health`);
     console.log(`🔗 Leads: http://localhost:${PORT}/api/leads`);
+    console.log(`🔗 Import: http://localhost:${PORT}/api/leads/import`);
+    console.log(`🔗 Meta: http://localhost:${PORT}/api/meta/webhook`);
     console.log(`🔗 Reports: http://localhost:${PORT}/api/reports/lead-stats`);
   });
 }
