@@ -1,4 +1,4 @@
-// server.js - Fixed for Vercel
+// server.js - Fixed for both local and Vercel
 const express = require('express');
 const mongoose = require('mongoose');
 const bcrypt = require('bcryptjs');
@@ -6,7 +6,7 @@ const jwt = require('jsonwebtoken');
 
 const app = express();
 
-// SIMPLE CORS - ALLOW ALL ORIGINS FOR TESTING
+// Middleware
 app.use((req, res, next) => {
   res.header('Access-Control-Allow-Origin', '*');
   res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
@@ -21,16 +21,20 @@ app.use((req, res, next) => {
 
 app.use(express.json());
 
-// SIMPLE LOGGING
+// Logging
 app.use((req, res, next) => {
   console.log(`[${new Date().toISOString()}] ${req.method} ${req.path}`);
   next();
 });
 
-// SAFE MongoDB connection
+// MongoDB connection - LAZY LOADING (only connect when needed)
+let dbConnected = false;
 const connectDB = async () => {
+  if (dbConnected) return true;
+  
   try {
     if (mongoose.connection.readyState === 1) {
+      dbConnected = true;
       return true;
     }
     
@@ -43,9 +47,10 @@ const connectDB = async () => {
     await mongoose.connect(MONGODB_URI, {
       serverSelectionTimeoutMS: 5000,
       socketTimeoutMS: 10000,
-      maxPoolSize: 5,
+      maxPoolSize: 2, // Smaller for serverless
     });
     console.log('✅ MongoDB connected');
+    dbConnected = true;
     return true;
   } catch (error) {
     console.log('⚠️  MongoDB connection failed:', error.message);
@@ -53,60 +58,61 @@ const connectDB = async () => {
   }
 };
 
-// Connect in background (non-blocking)
-connectDB();
+// Routes with error handling
+const setupRoutes = () => {
+  try {
+    const authRoutes = require('./routes/auth');
+    const leadsRoutes = require('./routes/leads');
+    const usersRoutes = require('./routes/users');
+    const reportsRoutes = require('./routes/reports');
+    const metaRoutes = require('./routes/meta');
+    const importRoutes = require('./routes/import');
+    
+    app.use('/api/auth', authRoutes);
+    app.use('/api/leads', leadsRoutes);
+    app.use('/api/users', usersRoutes);
+    app.use('/api/reports', reportsRoutes);
+    app.use('/api/meta', metaRoutes);
+    app.use('/api/import', importRoutes);
+    
+    console.log('✅ All routes loaded successfully');
+  } catch (error) {
+    console.error('❌ Error loading routes:', error.message);
+    
+    // Fallback routes
+    app.use('/api/auth', (req, res) => res.status(503).json({ error: 'Auth routes unavailable' }));
+    app.use('/api/leads', (req, res) => res.status(503).json({ error: 'Leads routes unavailable' }));
+    app.use('/api/users', (req, res) => res.status(503).json({ error: 'Users routes unavailable' }));
+    app.use('/api/reports', (req, res) => res.status(503).json({ error: 'Reports routes unavailable' }));
+    app.use('/api/meta', (req, res) => res.status(503).json({ error: 'Meta routes unavailable' }));
+    app.use('/api/import', (req, res) => res.status(503).json({ error: 'Import routes unavailable' }));
+  }
+};
 
-// Import routes with error handling
-let authRoutes, leadsRoutes, usersRoutes, reportsRoutes, metaRoutes, importRoutes;
+// Initialize routes
+setupRoutes();
 
-try {
-  authRoutes = require('./routes/auth');
-  leadsRoutes = require('./routes/leads');
-  usersRoutes = require('./routes/users');
-  reportsRoutes = require('./routes/reports');
-  metaRoutes = require('./routes/meta');
-  importRoutes = require('./routes/import');
-  console.log('✅ All routes loaded successfully');
-} catch (error) {
-  console.error('❌ Error loading routes:', error.message);
-  const router = express.Router();
-  router.all('*', (req, res) => res.status(503).json({ 
-    status: 'fallback',
-    message: 'Routes not loaded properly'
-  }));
-  authRoutes = leadsRoutes = usersRoutes = reportsRoutes = metaRoutes = importRoutes = router;
-}
-
-// Use routes
-app.use('/api/auth', authRoutes);
-app.use('/api/leads', leadsRoutes);
-app.use('/api/users', usersRoutes);
-app.use('/api/reports', reportsRoutes);
-app.use('/api/meta', metaRoutes);
-app.use('/api/import', importRoutes);
-
-// Root endpoint
+// Basic endpoints (always work)
 app.get('/', (req, res) => {
   res.json({
     success: true,
-    message: 'Smart Register Backend API',
+    message: 'Lead Manager Backend API',
     version: '1.0.0',
     timestamp: new Date().toISOString(),
     environment: process.env.NODE_ENV
   });
 });
 
-// Health check
 app.get('/api/health', async (req, res) => {
   try {
-    const dbConnected = await connectDB();
+    const dbStatus = await connectDB();
     res.json({ 
       success: true, 
       message: 'Server is running',
       timestamp: new Date().toISOString(),
       environment: process.env.NODE_ENV,
       mongodb: {
-        connected: dbConnected,
+        connected: dbStatus,
         state: mongoose.connection.readyState,
       }
     });
@@ -117,6 +123,15 @@ app.get('/api/health', async (req, res) => {
       error: error.message
     });
   }
+});
+
+app.get('/api/test-cors', (req, res) => {
+  res.json({
+    success: true,
+    message: 'CORS is working!',
+    yourOrigin: req.headers.origin || 'No origin header',
+    timestamp: new Date().toISOString()
+  });
 });
 
 // Error handling
@@ -133,17 +148,19 @@ app.use((err, req, res, next) => {
 app.use('*', (req, res) => {
   res.status(404).json({
     success: false,
-    message: 'Route not found'
+    message: 'Route not found',
+    path: req.originalUrl
   });
 });
 
-// CRITICAL: For Vercel, export the app without starting the server
+// Export the app without starting the server
 module.exports = app;
 
-// ONLY start server if running locally
+// Only start server if running locally (not in Vercel)
 if (process.env.NODE_ENV !== 'production' && require.main === module) {
   const PORT = process.env.PORT || 5000;
   app.listen(PORT, '0.0.0.0', () => {
     console.log(`🚀 Server running on port ${PORT}`);
+    console.log(`🔗 http://localhost:${PORT}`);
   });
 }
