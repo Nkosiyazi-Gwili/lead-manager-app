@@ -27,46 +27,58 @@ app.use((req, res, next) => {
 });
 
 // SAFE MongoDB connection - won't crash if DB fails
+let isConnecting = false;
+let dbConnection = null;
+
 const connectDB = async () => {
   try {
+    // Return existing connection if available and connected
     if (mongoose.connection.readyState === 1) {
       return true;
     }
     
+    // Prevent multiple simultaneous connection attempts
+    if (isConnecting) {
+      console.log('⚠️  DB connection already in progress, waiting...');
+      // Wait for ongoing connection to complete
+      await new Promise(resolve => setTimeout(resolve, 1000));
+      if (mongoose.connection.readyState === 1) {
+        return true;
+      }
+      return false;
+    }
+    
+    isConnecting = true;
+    
     const MONGODB_URI = process.env.MONGODB_URI;
     if (!MONGODB_URI) {
       console.log('⚠️  MONGODB_URI not set, using mock data');
+      isConnecting = false;
       return false;
     }
     
     await mongoose.connect(MONGODB_URI, {
-      serverSelectionTimeoutMS: 5000, // Fast timeout
+      serverSelectionTimeoutMS: 5000,
       socketTimeoutMS: 10000,
-      maxPoolSize: 10, // Added connection pool settings
+      maxPoolSize: 5, // Smaller pool for serverless
+      bufferCommands: false,
+      bufferMaxEntries: 0
     });
+    
     console.log('✅ MongoDB connected');
+    isConnecting = false;
     return true;
   } catch (error) {
-    console.log('⚠️  MongoDB connection failed, using mock data:', error.message);
+    console.log('⚠️  MongoDB connection failed:', error.message);
+    isConnecting = false;
     return false;
   }
 };
 
-// Connect in background (non-blocking) with retry logic
-let dbConnectionAttempted = false;
-const initializeDB = async () => {
-  if (!dbConnectionAttempted) {
-    dbConnectionAttempted = true;
-    await connectDB();
-  }
-};
-initializeDB();
-
-// Import routes with better error handling
+// Import routes with error handling
 let authRoutes, leadsRoutes, usersRoutes, reportsRoutes, metaRoutes, importRoutes;
 
 try {
-  // Use dynamic imports for better error isolation
   authRoutes = require('./routes/auth');
   leadsRoutes = require('./routes/leads');
   usersRoutes = require('./routes/users');
@@ -76,23 +88,13 @@ try {
   console.log('✅ All routes loaded successfully');
 } catch (error) {
   console.error('❌ Error loading routes:', error.message);
-  // Create individual fallback routes with more specific responses
-  const createFallbackRouter = (routeName) => {
-    const router = express.Router();
-    router.all('*', (req, res) => res.status(503).json({
-      success: false,
-      message: `Service temporarily unavailable - ${routeName} routes failed to load`,
-      error: process.env.NODE_ENV === 'production' ? undefined : error.message
-    }));
-    return router;
-  };
-  
-  authRoutes = createFallbackRouter('auth');
-  leadsRoutes = createFallbackRouter('leads');
-  usersRoutes = createFallbackRouter('users');
-  reportsRoutes = createFallbackRouter('reports');
-  metaRoutes = createFallbackRouter('meta');
-  importRoutes = createFallbackRouter('import');
+  // Create simple fallback routes
+  const router = express.Router();
+  router.all('*', (req, res) => res.status(503).json({ 
+    status: 'fallback',
+    message: 'Routes not loaded properly'
+  }));
+  authRoutes = leadsRoutes = usersRoutes = reportsRoutes = metaRoutes = importRoutes = router;
 }
 
 // Use routes
@@ -101,7 +103,7 @@ app.use('/api/leads', leadsRoutes);
 app.use('/api/users', usersRoutes);
 app.use('/api/reports', reportsRoutes);
 app.use('/api/meta', metaRoutes);
-app.use('/api/import', importRoutes); // Fixed: moved import routes to proper base path
+app.use('/api/import', importRoutes);
 
 // Root endpoint
 app.get('/', (req, res) => {
@@ -154,7 +156,7 @@ function getConnectionStateText(state) {
   }
 }
 
-// Test endpoint - FIXED: removed undefined variable
+// Test endpoint
 app.get('/api/test-cors', (req, res) => {
   res.json({
     success: true,
@@ -164,72 +166,40 @@ app.get('/api/test-cors', (req, res) => {
   });
 });
 
-// Error handling middleware - IMPROVED
+// Error handling middleware
 app.use((err, req, res, next) => {
-  console.error('Unhandled Error:', err);
-  
-  // Mongoose validation error
-  if (err.name === 'ValidationError') {
-    return res.status(400).json({
-      success: false,
-      message: 'Validation Error',
-      error: process.env.NODE_ENV === 'production' ? {} : err.message,
-      details: process.env.NODE_ENV === 'production' ? {} : err.errors
-    });
-  }
-  
-  // JWT error
-  if (err.name === 'JsonWebTokenError') {
-    return res.status(401).json({
-      success: false,
-      message: 'Invalid token'
-    });
-  }
-  
-  // Mongoose duplicate key error
-  if (err.code === 11000) {
-    return res.status(409).json({
-      success: false,
-      message: 'Duplicate entry found',
-      error: process.env.NODE_ENV === 'production' ? {} : err.message
-    });
-  }
-  
-  res.status(err.status || 500).json({
+  console.error('Error:', err);
+  res.status(500).json({
     success: false,
     message: 'Internal Server Error',
-    error: process.env.NODE_ENV === 'production' ? {} : err.message,
-    ...(process.env.NODE_ENV !== 'production' && { stack: err.stack })
+    error: process.env.NODE_ENV === 'production' ? {} : err.message
   });
 });
 
-// 404 handler - IMPROVED
+// 404 handler
 app.use('*', (req, res) => {
   res.status(404).json({
     success: false,
     message: 'Route not found',
-    path: req.originalUrl,
-    method: req.method,
-    timestamp: new Date().toISOString()
+    path: req.originalUrl
   });
 });
 
-// Serverless function handler with connection management - IMPROVED
-const handler = async (req, res) => {
+// Vercel serverless function handler - SIMPLIFIED
+module.exports = async (req, res) => {
   try {
-    // Ensure DB connection is active for each request
-    const dbConnected = await connectDB();
+    // For serverless, we don't call app.listen()
+    // Just handle the request directly with the Express app
     
-    if (!dbConnected && !isReadOnlyEndpoint(req.path, req.method)) {
-      return res.status(503).json({
-        success: false,
-        message: 'Database connection unavailable. Please try again.',
-        mongodbState: mongoose.connection.readyState,
-        stateText: getConnectionStateText(mongoose.connection.readyState)
-      });
+    // Optional: Connect to DB if needed for this request
+    // But don't block the request if DB is unavailable
+    try {
+      await connectDB();
+    } catch (dbError) {
+      console.log('DB connection optional for request');
     }
     
-    // Pass request to Express app
+    // Handle the request with Express
     return app(req, res);
   } catch (error) {
     console.error('Serverless function error:', error);
@@ -241,22 +211,12 @@ const handler = async (req, res) => {
   }
 };
 
-// Helper to determine if endpoint can work without DB
-function isReadOnlyEndpoint(path, method) {
-  const readOnlyPaths = ['/api/health', '/', '/api/test-cors'];
-  const readOnlyMethods = ['GET', 'OPTIONS'];
-  
-  return readOnlyPaths.includes(path) && readOnlyMethods.includes(method);
-}
-
-// Only listen locally in development
+// ONLY start the server if we're running locally
+// This is crucial for Vercel deployment
 if (process.env.NODE_ENV !== 'production' && require.main === module) {
   const PORT = process.env.PORT || 5000;
   app.listen(PORT, '0.0.0.0', () => {
     console.log(`🚀 Server running on port ${PORT}`);
     console.log(`🔗 Health check: http://localhost:${PORT}/api/health`);
-    console.log(`🌍 Environment: ${process.env.NODE_ENV || 'development'}`);
   });
 }
-
-module.exports = handler;
