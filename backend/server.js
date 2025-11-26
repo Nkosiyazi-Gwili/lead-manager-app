@@ -1,11 +1,13 @@
 // server.js - Fixed for both local and Vercel
 const express = require('express');
 const mongoose = require('mongoose');
+
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 
 const app = express();
 
+mongoose.set('strictQuery', true);
 // Middleware
 app.use((req, res, next) => {
   res.header('Access-Control-Allow-Origin', '*');
