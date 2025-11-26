@@ -95,7 +95,7 @@ const User = mongoose.models.User || mongoose.model('User', userSchema);
 app.get('/', (req, res) => {
   res.json({
     success: true,
-    message: '🚀 Smart Register Backend API',
+    message: '🚀 Lead Manager Backend API',
     timestamp: new Date().toISOString(),
     database: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected',
     environment: process.env.NODE_ENV || 'development'
